@@ -145,8 +145,9 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 ### Web UI features
 
-- Search by title, author, publisher, genre, and language (100 results per page)
-- Browse the full library with pagination, or use filters to narrow results
+- Search by title, author, publisher, genre, and language
+- Configurable page size (10, 25, 50, 100, or 200 books per page)
+- Debounced search, jump-to-page, and keyboard shortcuts (<kbd>?</kbd> for help)
 - Title and author filters use case-insensitive substring search
 - Book detail pages with cover, metadata, HTML descriptions, download, and **Fetch metadata online**
 - The fetch button shows “Fetching…” while the request is in progress

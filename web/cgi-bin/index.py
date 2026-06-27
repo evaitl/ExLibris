@@ -23,6 +23,8 @@ def main() -> None:
     genre = form.getfirst("genre", "") or ""
     language = form.getfirst("language", "") or ""
     sort = form.getfirst("sort", "title") or "title"
+    sort_dir = form.getfirst("sort_dir", "") or ""
+    raw_page_size = form.getfirst("page_size", "") or ""
     raw_page = form.getfirst("page", "1") or "1"
     page = int(raw_page) if str(raw_page).isdigit() else 1
 
@@ -36,7 +38,9 @@ def main() -> None:
                 genre=genre,
                 language=language,
                 sort=sort,
+                sort_dir=sort_dir,
                 page=page,
+                page_size=raw_page_size,
             )
         html = render_library(
             books,
@@ -50,6 +54,8 @@ def main() -> None:
             selected_genre=genre,
             selected_language=language,
             sort=sort,
+            sort_dir=sort_dir,
+            page_size=raw_page_size,
         )
         print("Content-Type: text/html; charset=utf-8")
         print()

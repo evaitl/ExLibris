@@ -3,7 +3,9 @@ from __future__ import annotations
 from urllib.parse import urlencode
 
 from exlibris.cgi.common import (
-    PAGE_SIZE,
+    DEFAULT_PAGE_SIZE,
+    DEFAULT_SORT_DIR,
+    PAGE_SIZE_OPTIONS,
     BookRow,
     FilterOptions,
     cgi_script,
@@ -14,6 +16,8 @@ from exlibris.cgi.common import (
     format_published_date,
     format_size,
     has_search_filters,
+    normalize_page_size,
+    normalize_sort_dir,
     static_asset,
     static_href,
 )
@@ -82,6 +86,8 @@ def _filter_query(
     genre: str,
     language: str,
     sort: str,
+    sort_dir: str,
+    page_size: int,
     page: int | None = None,
 ) -> str:
     params: dict[str, str] = {}
@@ -97,40 +103,123 @@ def _filter_query(
         params["language"] = language
     if sort and sort != "title":
         params["sort"] = sort
+    if sort_dir != DEFAULT_SORT_DIR.get(sort, "asc"):
+        params["sort_dir"] = sort_dir
+    if page_size != DEFAULT_PAGE_SIZE:
+        params["page_size"] = str(page_size)
     if page is not None and page > 1:
         params["page"] = str(page)
     query = urlencode(params)
     return f"?{query}" if query else ""
 
 
-def _format_count(count: int) -> str:
-    return f"{count:,}"
-
-
-def _pagination_nav(
+def _filter_hidden_inputs(
     *,
-    page: int,
-    filtered_count: int,
     title: str,
     author: str,
     publisher: str,
     genre: str,
     language: str,
     sort: str,
+    sort_dir: str,
+    page_size: int,
 ) -> str:
+    lines = [f'    <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">']
+    if title:
+        lines.append(f'    <input type="hidden" name="title" value="{esc(title)}">')
+    if author:
+        lines.append(f'    <input type="hidden" name="author" value="{esc(author)}">')
+    if publisher:
+        lines.append(f'    <input type="hidden" name="publisher" value="{esc(publisher)}">')
+    if genre:
+        lines.append(f'    <input type="hidden" name="genre" value="{esc(genre)}">')
+    if language:
+        lines.append(f'    <input type="hidden" name="language" value="{esc(language)}">')
+    if sort != "title":
+        lines.append(f'    <input type="hidden" name="sort" value="{esc(sort)}">')
+    if page_size != DEFAULT_PAGE_SIZE:
+        lines.append(f'    <input type="hidden" name="page_size" value="{page_size}">')
+    return "\n".join(lines)
+
+
+def _page_size_options(selected: int) -> str:
+    lines = []
+    for size in PAGE_SIZE_OPTIONS:
+        is_selected = " selected" if size == selected else ""
+        lines.append(f'              <option value="{size}"{is_selected}>{size}</option>')
+    return "\n".join(lines)
+
+
+def _keyboard_help_dialog() -> str:
+    return """    <dialog id="keyboard-help" class="keyboard-help">
+      <h2>Keyboard shortcuts</h2>
+      <dl class="keyboard-help__list">
+        <dt><kbd>/</kbd></dt>
+        <dd>Focus title search</dd>
+        <dt><kbd>Esc</kbd></dt>
+        <dd>Clear filters</dd>
+        <dt><kbd>?</kbd></dt>
+        <dd>Show this help</dd>
+        <dt><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dt>
+        <dd>Previous / next page</dd>
+      </dl>
+      <button type="button" class="keyboard-help__close" data-keyboard-help-close>Close</button>
+    </dialog>
+"""
+def _format_count(count: int) -> str:
+    return f"{count:,}"
+
+
+def _sort_dir_controls(sort: str, sort_dir: str) -> str:
+    if sort == "random":
+        return ""
+    asc_active = " sort-dir__btn--active" if sort_dir == "asc" else ""
+    desc_active = " sort-dir__btn--active" if sort_dir == "desc" else ""
+    return f"""            <div class="sort-dir" role="group" aria-label="Sort direction">
+              <button type="button" class="sort-dir__btn{asc_active}" data-sort-dir="asc" aria-label="Sort ascending" title="Ascending">↑</button>
+              <button type="button" class="sort-dir__btn{desc_active}" data-sort-dir="desc" aria-label="Sort descending" title="Descending">↓</button>
+            </div>"""
+
+
+def _pagination_nav(
+    *,
+    page: int,
+    filtered_count: int,
+    page_size: int,
+    title: str,
+    author: str,
+    publisher: str,
+    genre: str,
+    language: str,
+    sort: str,
+    sort_dir: str,
+) -> str:
+    base = cgi_script("index.py")
+    common = dict(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        sort=sort,
+        sort_dir=sort_dir,
+        page_size=page_size,
+    )
+    hiddens = _filter_hidden_inputs(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        sort=sort,
+        sort_dir=sort_dir,
+        page_size=page_size,
+    )
+
     if sort == "random":
         if filtered_count == 0:
             return ""
 
-        base = cgi_script("index.py")
-        common = dict(
-            title=title,
-            author=author,
-            publisher=publisher,
-            genre=genre,
-            language=language,
-            sort=sort,
-        )
         prev_url = (
             base + _filter_query(**common, page=page - 1) if page > 1 else ""
         )
@@ -160,20 +249,10 @@ def _pagination_nav(
 {next_link}    </nav>
 """
 
-    if filtered_count <= PAGE_SIZE:
+    if filtered_count <= page_size:
         return ""
 
-    max_page = (filtered_count + PAGE_SIZE - 1) // PAGE_SIZE
-    base = cgi_script("index.py")
-    common = dict(
-        title=title,
-        author=author,
-        publisher=publisher,
-        genre=genre,
-        language=language,
-        sort=sort,
-    )
-
+    max_page = (filtered_count + page_size - 1) // page_size
     prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
     next_url = (
         base + _filter_query(**common, page=page + 1) if page < max_page else ""
@@ -201,9 +280,19 @@ def _pagination_nav(
             f'      <a class="pagination__link" href="{esc(next_url)}">Next →</a>\n'
         )
 
+    jump_form = f"""      <form class="pagination__jump" method="get" action="{esc(base)}">
+{hiddens}
+        <label class="pagination__jump-label">
+          Page
+          <input class="pagination__jump-input" type="number" name="page" min="1" max="{max_page}" value="{page}" aria-label="Jump to page">
+        </label>
+        <button type="submit" class="pagination__jump-btn">Go</button>
+      </form>
+"""
+
     return f"""    <nav {" ".join(attrs)}>
-{prev_link}      <span class="pagination__status">Page {page} of {max_page} · Page Up/Down to browse</span>
-{next_link}    </nav>
+{prev_link}      <span class="pagination__status">Page {page} of {max_page}</span>
+{jump_form}{next_link}    </nav>
 """
 
 
@@ -220,7 +309,11 @@ def render_library(
     selected_genre: str,
     selected_language: str,
     sort: str,
+    sort_dir: str,
+    page_size: int,
 ) -> str:
+    sort_dir = normalize_sort_dir(sort, sort_dir)
+    page_size = normalize_page_size(page_size)
     sort_selected = {
         key: " selected" if sort == key else ""
         for key in ("title", "author", "published", "size", "scanned", "random")
@@ -231,12 +324,14 @@ def render_library(
         pagination = _pagination_nav(
             page=page,
             filtered_count=filtered_count,
+            page_size=page_size,
             title=selected_title,
             author=selected_author,
             publisher=selected_publisher,
             genre=selected_genre,
             language=selected_language,
             sort=sort,
+            sort_dir=sort_dir,
         )
         collection = f"""{pagination}    <ul class="book-grid">
 {cards}
@@ -273,8 +368,8 @@ def render_library(
                 f"{shown:,} random books · {_format_count(library_total)} in library"
             )
     elif filtered_count:
-        start = (page - 1) * PAGE_SIZE + 1
-        end = min(page * PAGE_SIZE, filtered_count)
+        start = (page - 1) * page_size + 1
+        end = min(page * page_size, filtered_count)
         if filtered:
             stats = (
                 f"Showing {start:,}–{end:,} of {filtered_count:,} matches "
@@ -287,42 +382,41 @@ def render_library(
     else:
         stats = f"No matches · {_format_count(library_total)} in library"
 
-    pagination_script = ""
-    if filtered_count and (sort == "random" or filtered_count > PAGE_SIZE):
-        pagination_script = (
-            f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
-        )
+    pagination_script = f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
 
+    clear_url = esc(cgi_script("index.py"))
     body = f"""    <section class="toolbar">
-      <form class="filter-form" method="get" action="{esc(cgi_script('index.py'))}">
+      <form id="library-filter-form" class="filter-form" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
+        <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">
         <div class="filter-form__row">
           <label class="filter-field">
             <span class="filter-field__label">Title</span>
-            <input type="search" name="title" value="{esc(selected_title)}" placeholder="Search titles…" aria-label="Filter by title">
+            <input type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Search titles…" aria-label="Filter by title" autocomplete="off" data-filter-search>
           </label>
           <label class="filter-field">
             <span class="filter-field__label">Author</span>
-            <input type="search" name="author" value="{esc(selected_author)}" placeholder="Search authors…" aria-label="Filter by author">
+            <input type="search" name="author" value="{esc(selected_author)}" placeholder="Search authors…" aria-label="Filter by author" autocomplete="off" data-filter-search>
           </label>
           <label class="filter-field">
             <span class="filter-field__label">Publisher</span>
-            <input type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Search publishers…" aria-label="Filter by publisher">
+            <input type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Search publishers…" aria-label="Filter by publisher" autocomplete="off" data-filter-search>
           </label>
           <label class="filter-field">
             <span class="filter-field__label">Genre</span>
-            <input type="search" name="genre" value="{esc(selected_genre)}" placeholder="Search genres…" aria-label="Filter by genre">
+            <input type="search" name="genre" value="{esc(selected_genre)}" placeholder="Search genres…" aria-label="Filter by genre" autocomplete="off" data-filter-search>
           </label>
           <label class="filter-field">
             <span class="filter-field__label">Language</span>
-            <select name="language" aria-label="Filter by language">
+            <select name="language" aria-label="Filter by language" data-filter-auto>
 {_select_options(options.languages, selected_language, "All languages")}
             </select>
           </label>
         </div>
         <div class="filter-form__row filter-form__row--actions">
-          <label class="filter-field">
+          <label class="filter-field filter-field--sort">
             <span class="filter-field__label">Sort</span>
-            <select name="sort" aria-label="Sort by">
+            <div class="sort-controls">
+              <select name="sort" aria-label="Sort by" data-filter-auto>
               <option value="title"{sort_selected["title"]}>Title</option>
               <option value="author"{sort_selected["author"]}>Author</option>
               <option value="published"{sort_selected["published"]}>Published date</option>
@@ -330,17 +424,27 @@ def render_library(
               <option value="scanned"{sort_selected["scanned"]}>Last scanned</option>
               <option value="random"{sort_selected["random"]}>Random</option>
             </select>
+{_sort_dir_controls(sort, sort_dir)}
+            </div>
+          </label>
+          <label class="filter-field filter-field--page-size">
+            <span class="filter-field__label">Per page</span>
+            <select name="page_size" aria-label="Books per page" data-filter-auto>
+{_page_size_options(page_size)}
+            </select>
           </label>
           <div class="filter-form__buttons">
             <button type="submit">Apply filters</button>
-            <a class="filter-clear" href="{esc(cgi_script('index.py'))}">Clear</a>
+            <a class="filter-clear" href="{clear_url}">Clear</a>
+            <button type="button" class="filter-help" data-keyboard-help-open title="Keyboard shortcuts (?)">?</button>
           </div>
         </div>
       </form>
-      <p class="stats">{stats}</p>
+      <p class="stats">{stats} · Press <kbd>?</kbd> for shortcuts</p>
     </section>
 
-{collection}{pagination_script}
+{collection}
+{_keyboard_help_dialog()}{pagination_script}
 """
     return page_shell("Library", body)
 

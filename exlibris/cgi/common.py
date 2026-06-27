@@ -238,15 +238,51 @@ def row_to_book(row: sqlite3.Row) -> BookRow:
     )
 
 
-SORT_OPTIONS = {
+SORT_COLUMNS = {
     "title": "COALESCE(NULLIF(sort_title, ''), NULLIF(title, ''), file_name) COLLATE NOCASE",
     "author": "authors COLLATE NOCASE",
-    "published": "published_date IS NULL, published_date DESC",
-    "size": "file_size DESC",
-    "scanned": "last_scanned_at DESC",
+    "published": "published_date",
+    "size": "file_size",
+    "scanned": "last_scanned_at",
 }
 
-PAGE_SIZE = 100
+DEFAULT_SORT_DIR = {
+    "title": "asc",
+    "author": "asc",
+    "published": "desc",
+    "size": "desc",
+    "scanned": "desc",
+}
+
+PAGE_SIZE_OPTIONS = (10, 25, 50, 100, 200)
+DEFAULT_PAGE_SIZE = 100
+PAGE_SIZE = DEFAULT_PAGE_SIZE
+
+
+def normalize_page_size(page_size: int | str | None) -> int:
+    try:
+        size = int(page_size) if page_size is not None and str(page_size).strip() else DEFAULT_PAGE_SIZE
+    except (TypeError, ValueError):
+        return DEFAULT_PAGE_SIZE
+    return size if size in PAGE_SIZE_OPTIONS else DEFAULT_PAGE_SIZE
+
+
+def normalize_sort_dir(sort: str, sort_dir: str | None) -> str:
+    if sort == "random":
+        return "asc"
+    if sort_dir in ("asc", "desc"):
+        return sort_dir
+    return DEFAULT_SORT_DIR.get(sort, "asc")
+
+
+def sort_order_by(sort: str, sort_dir: str) -> str:
+    if sort == "random":
+        return "RANDOM()"
+    direction = normalize_sort_dir(sort, sort_dir).upper()
+    if sort == "published":
+        return f"published_date IS NULL, published_date {direction}"
+    column = SORT_COLUMNS.get(sort, SORT_COLUMNS["title"])
+    return f"{column} {direction}"
 
 
 @dataclass(frozen=True)
@@ -319,8 +355,9 @@ def _book_filter_clause(
     genre: str,
     language: str,
     sort: str,
+    sort_dir: str = "asc",
 ) -> tuple[list[str], list[object], str]:
-    order_by = SORT_OPTIONS.get(sort, SORT_OPTIONS["title"])
+    order_by = sort_order_by(sort, sort_dir)
     params: list[object] = []
     where: list[str] = ["is_missing = 0"]
 
@@ -372,9 +409,13 @@ def list_books(
     genre: str = "",
     language: str = "",
     sort: str = "title",
+    sort_dir: str = "asc",
     page: int = 1,
+    page_size: int | str = DEFAULT_PAGE_SIZE,
 ) -> tuple[list[BookRow], int, int, int, FilterOptions]:
     """Return books, filtered_count, library_total, current_page, filter_options."""
+    sort_dir = normalize_sort_dir(sort, sort_dir)
+    page_size = normalize_page_size(page_size)
     library_total = int(
         conn.execute("SELECT COUNT(*) FROM books WHERE is_missing = 0").fetchone()[0]
     )
@@ -387,6 +428,7 @@ def list_books(
         genre=genre,
         language=language,
         sort=sort,
+        sort_dir=sort_dir,
     )
     where_sql = " AND ".join(where)
 
@@ -397,7 +439,7 @@ def list_books(
     page = max(1, page)
 
     if sort == "random":
-        limit = min(PAGE_SIZE, filtered_count) if filtered_count else 0
+        limit = min(page_size, filtered_count) if filtered_count else 0
         if limit == 0:
             return [], filtered_count, library_total, page, options
         rows = conn.execute(
@@ -412,11 +454,11 @@ def list_books(
         ).fetchall()
         return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
 
-    max_page = max(1, (filtered_count + PAGE_SIZE - 1) // PAGE_SIZE)
+    max_page = max(1, (filtered_count + page_size - 1) // page_size)
     if page > max_page:
         page = max_page
 
-    offset = (page - 1) * PAGE_SIZE
+    offset = (page - 1) * page_size
     rows = conn.execute(
         f"""
         SELECT *
@@ -425,7 +467,7 @@ def list_books(
         ORDER BY {order_by}, id
         LIMIT ? OFFSET ?
         """,
-        [*params, PAGE_SIZE, offset],
+        [*params, page_size, offset],
     ).fetchall()
 
     return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
