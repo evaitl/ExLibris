@@ -40,23 +40,54 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _default_database_path() -> Path:
+    return project_root() / "data" / "library.db"
+
+
+def _resolve_project_path(path: Path) -> Path:
+    path = path.expanduser()
+    if not path.is_absolute():
+        path = project_root() / path
+    return path.resolve()
+
+
+def _load_yaml_config() -> dict:
+    config = project_root() / "config.yaml"
+    if not config.exists():
+        return {}
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
 def database_path() -> Path:
     env = os.environ.get("EXLIBRIS_DATABASE_PATH")
     if env:
         return Path(env).expanduser().resolve()
-    config = project_root() / "config.yaml"
-    if config.exists():
-        import yaml
+    data = _load_yaml_config()
+    if data.get("database_path"):
+        return _resolve_project_path(Path(data["database_path"]))
+    db = _default_database_path()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    return db
 
-        data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-        if isinstance(data, dict) and data.get("database_path"):
-            from exlibris.config import resolve_database_path
 
-            return resolve_database_path(Path(data["database_path"]))
-    from exlibris.config import DEFAULT_DATABASE_PATH
-
-    DEFAULT_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return DEFAULT_DATABASE_PATH
+def library_books_dirs() -> list[Path]:
+    env = os.environ.get("EXLIBRIS_SCAN_PATHS")
+    if env:
+        return [
+            Path(part.strip()).expanduser().resolve()
+            for part in env.split(os.pathsep)
+            if part.strip()
+        ]
+    data = _load_yaml_config()
+    raw_paths = data.get("scan_paths")
+    if isinstance(raw_paths, list) and raw_paths:
+        return [_resolve_project_path(Path(str(path))) for path in raw_paths]
+    return [Path("/media/books").resolve()]
 
 
 def static_href() -> str:
@@ -85,8 +116,6 @@ def fetch_metadata_action() -> str:
 
 def allowed_book_file(file_path: str) -> Path | None:
     """Return resolved ebook path only if it lives under a configured books directory."""
-    from exlibris.config import library_books_dirs
-
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
         return None
