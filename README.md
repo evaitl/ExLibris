@@ -145,7 +145,8 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 ### Web UI features
 
-- Filter by title, author, publisher, genre, and language
+- Search by title, author, publisher, genre, and language (100 results per page)
+- Enter at least one filter to browse, or choose **Random** sort to sample the library
 - Title and author filters use case-insensitive substring search
 - Book detail pages with cover, metadata, HTML descriptions, download, and **Fetch metadata online**
 - The fetch button shows “Fetching…” while the request is in progress

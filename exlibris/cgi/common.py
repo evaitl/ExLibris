@@ -95,6 +95,11 @@ def static_href() -> str:
     return os.environ.get("EXLIBRIS_STATIC_URL", "../static/style.css")
 
 
+def static_asset(name: str) -> str:
+    base = static_href().rsplit("/", 1)[0]
+    return f"{base}/{name}"
+
+
 def cgi_script(name: str) -> str:
     prefix = os.environ.get("EXLIBRIS_CGI_PREFIX", "")
     return f"{prefix}{name}"
@@ -241,6 +246,8 @@ SORT_OPTIONS = {
     "scanned": "last_scanned_at DESC",
 }
 
+PAGE_SIZE = 100
+
 
 @dataclass(frozen=True)
 class FilterOptions:
@@ -287,8 +294,24 @@ def _append_word_match(
             params.extend([pattern] * len(columns))
 
 
-def list_books(
-    conn: sqlite3.Connection,
+def has_search_filters(
+    *,
+    title: str = "",
+    author: str = "",
+    publisher: str = "",
+    genre: str = "",
+    language: str = "",
+) -> bool:
+    return bool(
+        title.strip()
+        or author.strip()
+        or publisher.strip()
+        or genre.strip()
+        or language
+    )
+
+
+def should_list_books(
     *,
     title: str = "",
     author: str = "",
@@ -296,7 +319,25 @@ def list_books(
     genre: str = "",
     language: str = "",
     sort: str = "title",
-) -> tuple[list[BookRow], int, FilterOptions]:
+) -> bool:
+    return has_search_filters(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+    ) or sort == "random"
+
+
+def _book_filter_clause(
+    *,
+    title: str,
+    author: str,
+    publisher: str,
+    genre: str,
+    language: str,
+    sort: str,
+) -> tuple[list[str], list[object], str]:
     order_by = SORT_OPTIONS.get(sort, SORT_OPTIONS["title"])
     params: list[object] = []
     where: list[str] = ["is_missing = 0"]
@@ -337,19 +378,85 @@ def list_books(
         where.append("language = ?")
         params.append(language)
 
-    sql = f"""
+    return where, params, order_by
+
+
+def list_books(
+    conn: sqlite3.Connection,
+    *,
+    title: str = "",
+    author: str = "",
+    publisher: str = "",
+    genre: str = "",
+    language: str = "",
+    sort: str = "title",
+    page: int = 1,
+) -> tuple[list[BookRow], int, int, int, FilterOptions]:
+    """Return books, filtered_count, library_total, current_page, filter_options."""
+    library_total = int(
+        conn.execute("SELECT COUNT(*) FROM books WHERE is_missing = 0").fetchone()[0]
+    )
+    options = load_filter_options(conn)
+
+    if not should_list_books(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        sort=sort,
+    ):
+        return [], 0, library_total, 1, options
+
+    where, params, order_by = _book_filter_clause(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        sort=sort,
+    )
+    where_sql = " AND ".join(where)
+
+    filtered_count = int(
+        conn.execute(f"SELECT COUNT(*) FROM books WHERE {where_sql}", params).fetchone()[0]
+    )
+
+    page = max(1, page)
+
+    if sort == "random":
+        limit = min(PAGE_SIZE, filtered_count) if filtered_count else 0
+        if limit == 0:
+            return [], filtered_count, library_total, page, options
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM books
+            WHERE {where_sql}
+            ORDER BY RANDOM()
+            LIMIT ?
+            """,
+            [*params, limit],
+        ).fetchall()
+        return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
+
+    max_page = max(1, (filtered_count + PAGE_SIZE - 1) // PAGE_SIZE)
+    if page > max_page:
+        page = max_page
+
+    offset = (page - 1) * PAGE_SIZE
+    rows = conn.execute(
+        f"""
         SELECT *
         FROM books
-        WHERE {" AND ".join(where)}
+        WHERE {where_sql}
         ORDER BY {order_by}, id
-    """
-    rows = conn.execute(sql, params).fetchall()
+        LIMIT ? OFFSET ?
+        """,
+        [*params, PAGE_SIZE, offset],
+    ).fetchall()
 
-    total = conn.execute(
-        "SELECT COUNT(*) FROM books WHERE is_missing = 0"
-    ).fetchone()[0]
-    options = load_filter_options(conn)
-    return [row_to_book(row) for row in rows], int(total), options
+    return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
 
 
 def get_book(conn: sqlite3.Connection, book_id: int) -> BookRow | None:

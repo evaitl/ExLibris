@@ -23,10 +23,12 @@ def main() -> None:
     genre = form.getfirst("genre", "") or ""
     language = form.getfirst("language", "") or ""
     sort = form.getfirst("sort", "title") or "title"
+    raw_page = form.getfirst("page", "1") or "1"
+    page = int(raw_page) if str(raw_page).isdigit() else 1
 
     try:
         with connect() as conn:
-            books, total, options = list_books(
+            books, filtered_count, library_total, page, options = list_books(
                 conn,
                 title=title,
                 author=author,
@@ -34,10 +36,13 @@ def main() -> None:
                 genre=genre,
                 language=language,
                 sort=sort,
+                page=page,
             )
         html = render_library(
             books,
-            total,
+            filtered_count,
+            library_total,
+            page,
             options,
             selected_title=title,
             selected_author=author,

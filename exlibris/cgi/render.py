@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from exlibris.cgi.common import (
+    PAGE_SIZE,
     BookRow,
     FilterOptions,
     cgi_script,
@@ -10,6 +13,9 @@ from exlibris.cgi.common import (
     fetch_metadata_action,
     format_published_date,
     format_size,
+    has_search_filters,
+    should_list_books,
+    static_asset,
     static_href,
 )
 
@@ -69,9 +75,144 @@ def _select_options(
     return "\n".join(lines)
 
 
+def _filter_query(
+    *,
+    title: str,
+    author: str,
+    publisher: str,
+    genre: str,
+    language: str,
+    sort: str,
+    page: int | None = None,
+) -> str:
+    params: dict[str, str] = {}
+    if title:
+        params["title"] = title
+    if author:
+        params["author"] = author
+    if publisher:
+        params["publisher"] = publisher
+    if genre:
+        params["genre"] = genre
+    if language:
+        params["language"] = language
+    if sort and sort != "title":
+        params["sort"] = sort
+    if page is not None and page > 1:
+        params["page"] = str(page)
+    query = urlencode(params)
+    return f"?{query}" if query else ""
+
+
+def _format_count(count: int) -> str:
+    return f"{count:,}"
+
+
+def _pagination_nav(
+    *,
+    page: int,
+    filtered_count: int,
+    title: str,
+    author: str,
+    publisher: str,
+    genre: str,
+    language: str,
+    sort: str,
+) -> str:
+    if sort == "random":
+        if filtered_count == 0:
+            return ""
+
+        base = cgi_script("index.py")
+        common = dict(
+            title=title,
+            author=author,
+            publisher=publisher,
+            genre=genre,
+            language=language,
+            sort=sort,
+        )
+        prev_url = (
+            base + _filter_query(**common, page=page - 1) if page > 1 else ""
+        )
+        next_url = base + _filter_query(**common, page=page + 1)
+
+        attrs = [
+            'class="pagination"',
+            'aria-label="Random library pages"',
+            "data-page-nav",
+        ]
+        if prev_url:
+            attrs.append(f'data-prev-url="{esc(prev_url)}"')
+        attrs.append(f'data-next-url="{esc(next_url)}"')
+
+        prev_link = ""
+        if prev_url:
+            prev_link = (
+                f'      <a class="pagination__link" href="{esc(prev_url)}">← Previous</a>\n'
+            )
+
+        next_link = (
+            f'      <a class="pagination__link" href="{esc(next_url)}">Next →</a>\n'
+        )
+
+        return f"""    <nav {" ".join(attrs)}>
+{prev_link}      <span class="pagination__status">Page {page} · Random sample · Page Up/Down for another</span>
+{next_link}    </nav>
+"""
+
+    if filtered_count <= PAGE_SIZE:
+        return ""
+
+    max_page = (filtered_count + PAGE_SIZE - 1) // PAGE_SIZE
+    base = cgi_script("index.py")
+    common = dict(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        sort=sort,
+    )
+
+    prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
+    next_url = (
+        base + _filter_query(**common, page=page + 1) if page < max_page else ""
+    )
+
+    attrs = [
+        'class="pagination"',
+        'aria-label="Search results pages"',
+        "data-page-nav",
+    ]
+    if prev_url:
+        attrs.append(f'data-prev-url="{esc(prev_url)}"')
+    if next_url:
+        attrs.append(f'data-next-url="{esc(next_url)}"')
+
+    prev_link = ""
+    if prev_url:
+        prev_link = (
+            f'      <a class="pagination__link" href="{esc(prev_url)}">← Previous</a>\n'
+        )
+
+    next_link = ""
+    if next_url:
+        next_link = (
+            f'      <a class="pagination__link" href="{esc(next_url)}">Next →</a>\n'
+        )
+
+    return f"""    <nav {" ".join(attrs)}>
+{prev_link}      <span class="pagination__status">Page {page} of {max_page} · Page Up/Down to browse</span>
+{next_link}    </nav>
+"""
+
+
 def render_library(
     books: list[BookRow],
-    total: int,
+    filtered_count: int,
+    library_total: int,
+    page: int,
     options: FilterOptions,
     *,
     selected_title: str,
@@ -83,19 +224,79 @@ def render_library(
 ) -> str:
     sort_selected = {
         key: " selected" if sort == key else ""
-        for key in ("title", "author", "published", "size", "scanned")
+        for key in ("title", "author", "published", "size", "scanned", "random")
     }
 
-    if books:
+    browsing = should_list_books(
+        title=selected_title,
+        author=selected_author,
+        publisher=selected_publisher,
+        genre=selected_genre,
+        language=selected_language,
+        sort=sort,
+    )
+
+    if not browsing:
+        collection = f"""    <div class="empty-state">
+      <h2>Search your library</h2>
+      <p>{_format_count(library_total)} books indexed. Enter a title, author, publisher, genre, or language above, or choose <strong>Random</strong> sort to browse.</p>
+    </div>"""
+    elif books:
         cards = "\n".join(_book_card(book) for book in books)
-        collection = f"""    <ul class="book-grid">
+        pagination = _pagination_nav(
+            page=page,
+            filtered_count=filtered_count,
+            title=selected_title,
+            author=selected_author,
+            publisher=selected_publisher,
+            genre=selected_genre,
+            language=selected_language,
+            sort=sort,
+        )
+        collection = f"""{pagination}    <ul class="book-grid">
 {cards}
-    </ul>"""
+    </ul>
+{pagination}"""
     else:
         collection = """    <div class="empty-state">
       <h2>No books found</h2>
-      <p>Try clearing filters or run <code>python scan_books.py</code> to index your library.</p>
+      <p>Try different search terms or clear filters.</p>
     </div>"""
+
+    if browsing and sort == "random" and filtered_count:
+        shown = len(books)
+        if has_search_filters(
+            title=selected_title,
+            author=selected_author,
+            publisher=selected_publisher,
+            genre=selected_genre,
+            language=selected_language,
+        ):
+            stats = (
+                f"{shown:,} random books from {filtered_count:,} matches "
+                f"· {_format_count(library_total)} in library"
+            )
+        else:
+            stats = (
+                f"{shown:,} random books · {_format_count(library_total)} in library"
+            )
+    elif browsing and filtered_count:
+        start = (page - 1) * PAGE_SIZE + 1
+        end = min(page * PAGE_SIZE, filtered_count)
+        stats = (
+            f"Showing {start:,}–{end:,} of {filtered_count:,} matches "
+            f"· {_format_count(library_total)} in library"
+        )
+    elif browsing:
+        stats = f"No matches · {_format_count(library_total)} in library"
+    else:
+        stats = f"{_format_count(library_total)} books in library"
+
+    pagination_script = ""
+    if browsing and filtered_count and (sort == "random" or filtered_count > PAGE_SIZE):
+        pagination_script = (
+            f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
+        )
 
     body = f"""    <section class="toolbar">
       <form class="filter-form" method="get" action="{esc(cgi_script('index.py'))}">
@@ -132,6 +333,7 @@ def render_library(
               <option value="published"{sort_selected["published"]}>Published date</option>
               <option value="size"{sort_selected["size"]}>Size</option>
               <option value="scanned"{sort_selected["scanned"]}>Last scanned</option>
+              <option value="random"{sort_selected["random"]}>Random</option>
             </select>
           </label>
           <div class="filter-form__buttons">
@@ -140,10 +342,10 @@ def render_library(
           </div>
         </div>
       </form>
-      <p class="stats">{len(books)} shown · {total} total in library</p>
+      <p class="stats">{stats}</p>
     </section>
 
-{collection}
+{collection}{pagination_script}
 """
     return page_shell("Library", body)
 
