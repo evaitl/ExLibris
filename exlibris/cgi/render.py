@@ -7,6 +7,7 @@ from exlibris.cgi.common import (
     cover_href,
     download_href,
     esc,
+    fetch_metadata_action,
     format_size,
     static_href,
 )
@@ -39,8 +40,9 @@ def page_shell(title: str, body: str) -> str:
 def _cover_img(book: BookRow, *, css_class: str = "book-cover") -> str:
     title = book.title or book.file_name
     if book.cover_path:
+        version = book.last_scanned_at.replace(":", "").replace("-", "")
         return (
-            f'<img class="{css_class}" src="{esc(cover_href(book.id))}" '
+            f'<img class="{css_class}" src="{esc(cover_href(book.id, version=version))}" '
             f'alt="Cover: {esc(title)}" loading="lazy">'
         )
     initial = esc(title[0].upper() if title else "?")
@@ -173,7 +175,12 @@ def _book_card(book: BookRow) -> str:
       </li>"""
 
 
-def render_book_detail(book: BookRow) -> str:
+def render_book_detail(
+    book: BookRow,
+    *,
+    notice: str = "",
+    error: str = "",
+) -> str:
     title = book.title or book.file_name
     subtitle = (
         f'      <p class="subtitle">by {esc(book.authors)}</p>\n' if book.authors else ""
@@ -212,8 +219,16 @@ def render_book_detail(book: BookRow) -> str:
       </section>
 """
 
-    body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+    flash = ""
+    if notice:
+        flash = f"""      <p class="flash flash--notice">{esc(notice)}</p>
+"""
+    elif error:
+        flash = f"""      <p class="flash flash--error">{esc(error)}</p>
+"""
 
+    body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+{flash}
     <article class="book-detail">
       <div class="book-detail__layout">
         {_cover_img(book, css_class="book-cover book-cover--large")}
@@ -223,6 +238,10 @@ def render_book_detail(book: BookRow) -> str:
             <h1>{esc(title)}</h1>
 {subtitle}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
+              <form class="book-actions__form" method="post" action="{esc(fetch_metadata_action())}">
+                <input type="hidden" name="id" value="{book.id}">
+                <button type="submit" class="button button--fetch">Fetch metadata online</button>
+              </form>
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
             </p>
           </header>

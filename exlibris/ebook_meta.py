@@ -87,7 +87,7 @@ def _read_via_opf(path: Path, cmd: str) -> EbookMeta | None:
         _run_ebook_meta(cmd, [str(path), "--to-opf", str(opf_path)])
         if not opf_path.exists() or opf_path.stat().st_size == 0:
             return None
-        return _parse_opf(opf_path.read_text(encoding="utf-8", errors="replace"))
+        return parse_opf(opf_path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _read_via_text(path: Path, cmd: str) -> EbookMeta:
@@ -121,7 +121,7 @@ def _parse_text_output(text: str) -> EbookMeta:
     return meta
 
 
-def _parse_opf(xml_text: str) -> EbookMeta:
+def parse_opf(xml_text: str) -> EbookMeta:
     root = ET.fromstring(xml_text)
     ns = {
         "opf": "http://www.idpf.org/2007/opf",
@@ -256,3 +256,33 @@ def extract_cover(
     if dest.exists():
         dest.unlink()
     return None
+
+
+def apply_opf(
+    path: Path,
+    opf_xml: str,
+    *,
+    ebook_meta_cmd: str | None = None,
+) -> None:
+    """Write fetched OPF metadata into a local ebook file."""
+    path = path.expanduser().resolve()
+    cmd = find_ebook_meta(ebook_meta_cmd)
+    with tempfile.TemporaryDirectory() as tmp:
+        opf_path = Path(tmp) / "metadata.opf"
+        opf_path.write_text(opf_xml, encoding="utf-8")
+        _run_ebook_meta(cmd, [str(path), "--from-opf", str(opf_path)])
+
+
+def set_cover(
+    path: Path,
+    cover_path: Path,
+    *,
+    ebook_meta_cmd: str | None = None,
+) -> None:
+    """Embed a cover image into a local ebook file."""
+    path = path.expanduser().resolve()
+    cover_path = cover_path.expanduser().resolve()
+    if not cover_path.is_file():
+        raise EbookMetaError(f"Cover file not found: {cover_path}")
+    cmd = find_ebook_meta(ebook_meta_cmd)
+    _run_ebook_meta(cmd, [str(path), "--cover", str(cover_path)])

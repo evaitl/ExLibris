@@ -6,6 +6,7 @@ from __future__ import annotations
 import cgi
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -27,6 +28,8 @@ def main() -> None:
         return
 
     book_id = int(raw_id)
+    notice = unquote(form.getfirst("notice") or "")
+    error = unquote(form.getfirst("error") or "")
 
     try:
         with connect() as conn:
@@ -40,7 +43,7 @@ def main() -> None:
 
         print("Content-Type: text/html; charset=utf-8")
         print()
-        print(render_book_detail(book))
+        print(render_book_detail(book, notice=notice, error=error))
     except FileNotFoundError as exc:
         print("Content-Type: text/html; charset=utf-8")
         print("Status: 503 Service Unavailable")

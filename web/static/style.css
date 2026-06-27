@@ -357,6 +357,28 @@ body {
   font-size: 0.95rem;
 }
 
+.book-actions__form {
+  display: inline;
+  margin: 0;
+}
+
+.flash {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+}
+
+.flash--notice {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.flash--error {
+  background: color-mix(in srgb, #c0392b 12%, var(--surface));
+  border-color: color-mix(in srgb, #c0392b 35%, transparent);
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -374,6 +396,16 @@ body {
 
 .button--download:hover {
   filter: brightness(1.05);
+}
+
+.button--fetch {
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.button--fetch:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
 .subtitle {

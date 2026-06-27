@@ -6,6 +6,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -63,12 +64,19 @@ def cgi_script(name: str) -> str:
     return f"{prefix}{name}"
 
 
-def cover_href(book_id: int) -> str:
-    return f"{cgi_script('cover.py')}?id={book_id}"
+def cover_href(book_id: int, *, version: str | None = None) -> str:
+    url = f"{cgi_script('cover.py')}?id={book_id}"
+    if version:
+        url += f"&v={quote(version, safe='')}"
+    return url
 
 
 def download_href(book_id: int) -> str:
     return f"{cgi_script('download.py')}?id={book_id}"
+
+
+def fetch_metadata_action() -> str:
+    return cgi_script("fetch_metadata.py")
 
 
 def allowed_book_file(file_path: str) -> Path | None:
@@ -90,6 +98,16 @@ def connect() -> sqlite3.Connection:
         raise FileNotFoundError(f"Library database not found: {db}")
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+def connect_rw() -> sqlite3.Connection:
+    db = database_path()
+    if not db.exists():
+        raise FileNotFoundError(f"Library database not found: {db}")
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -260,3 +278,12 @@ def list_books(
 def get_book(conn: sqlite3.Connection, book_id: int) -> BookRow | None:
     row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
     return row_to_book(row) if row else None
+
+
+def update_book_fields(conn: sqlite3.Connection, book_id: int, fields: dict[str, object]) -> None:
+    if not fields:
+        return
+    columns = ", ".join(f"{key} = ?" for key in fields)
+    values = list(fields.values()) + [book_id]
+    conn.execute(f"UPDATE books SET {columns} WHERE id = ?", values)
+    conn.commit()
