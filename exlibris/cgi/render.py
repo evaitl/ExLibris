@@ -8,6 +8,7 @@ from exlibris.cgi.common import (
     download_href,
     esc,
     fetch_metadata_action,
+    format_published_date,
     format_size,
     static_href,
 )
@@ -196,11 +197,12 @@ def render_book_detail(
 
     optional_fields = [
         ("Publisher", book.publisher),
-        ("Published", book.published_date),
+        ("Published", format_published_date(book.published_date)),
         ("ISBN", book.isbn),
         ("Language", book.language),
         ("Genre", book.tags),
         ("Pages", str(book.page_count) if book.page_count is not None else None),
+        ("File name", book.file_name),
     ]
     meta_items = "\n".join(
         f"""        <div>

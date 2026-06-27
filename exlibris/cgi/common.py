@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
@@ -170,6 +171,38 @@ def format_size(size: int) -> str:
     if size >= 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size} B"
+
+
+def format_published_date(value: str | None) -> str:
+    """Format stored publication metadata for display (date only, no time)."""
+    if not value or not value.strip():
+        return ""
+    raw = value.strip()
+
+    if re.fullmatch(r"\d{4}", raw):
+        return raw
+
+    date_part = raw
+    if "T" in raw:
+        date_part = raw.split("T", 1)[0]
+    elif " " in raw:
+        date_part = raw.split(" ", 1)[0]
+
+    if re.fullmatch(r"\d{4}-\d{2}", date_part):
+        year_s, month_s = date_part.split("-", 1)
+        try:
+            return date(int(year_s), int(month_s), 1).strftime("%B %Y")
+        except ValueError:
+            return raw
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_part):
+        try:
+            parsed = date.fromisoformat(date_part)
+            return f"{parsed.day} {parsed.strftime('%B %Y')}"
+        except ValueError:
+            return raw
+
+    return raw
 
 
 def row_to_book(row: sqlite3.Row) -> BookRow:
