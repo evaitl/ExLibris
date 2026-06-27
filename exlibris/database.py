@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def get_engine(db_path: Path) -> Engine:
@@ -72,6 +72,15 @@ def init_db(engine: Engine) -> sessionmaker[Session]:
         )
 
     return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def find_book_by_content_hash(session: Session, content_hash: str) -> Book | None:
+    return session.scalar(
+        select(Book)
+        .where(Book.content_hash == content_hash)
+        .order_by(Book.id)
+        .limit(1)
+    )
 
 
 def upsert_book(session: Session, data: dict) -> Book:

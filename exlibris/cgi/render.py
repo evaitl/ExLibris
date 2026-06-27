@@ -238,7 +238,7 @@ def render_book_detail(
             <h1>{esc(title)}</h1>
 {subtitle}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
-              <form class="book-actions__form" method="post" action="{esc(fetch_metadata_action())}">
+              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">
                 <button type="submit" class="button button--fetch">Fetch metadata online</button>
               </form>

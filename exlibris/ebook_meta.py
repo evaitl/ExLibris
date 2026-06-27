@@ -256,33 +256,3 @@ def extract_cover(
     if dest.exists():
         dest.unlink()
     return None
-
-
-def apply_opf(
-    path: Path,
-    opf_xml: str,
-    *,
-    ebook_meta_cmd: str | None = None,
-) -> None:
-    """Write fetched OPF metadata into a local ebook file."""
-    path = path.expanduser().resolve()
-    cmd = find_ebook_meta(ebook_meta_cmd)
-    with tempfile.TemporaryDirectory() as tmp:
-        opf_path = Path(tmp) / "metadata.opf"
-        opf_path.write_text(opf_xml, encoding="utf-8")
-        _run_ebook_meta(cmd, [str(path), "--from-opf", str(opf_path)])
-
-
-def set_cover(
-    path: Path,
-    cover_path: Path,
-    *,
-    ebook_meta_cmd: str | None = None,
-) -> None:
-    """Embed a cover image into a local ebook file."""
-    path = path.expanduser().resolve()
-    cover_path = cover_path.expanduser().resolve()
-    if not cover_path.is_file():
-        raise EbookMetaError(f"Cover file not found: {cover_path}")
-    cmd = find_ebook_meta(ebook_meta_cmd)
-    _run_ebook_meta(cmd, [str(path), "--cover", str(cover_path)])

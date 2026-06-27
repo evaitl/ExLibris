@@ -1,10 +1,11 @@
+data/
+books/
 library.db
 library.db-journal
 library.db-wal
 library.db-shm
-scan.log
-books/
 covers/
+scan.log
 .env
 __pycache__/
 *.py[cod]
@@ -12,3 +13,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+apache/run/
+apache/*.pid
+apache/*.log

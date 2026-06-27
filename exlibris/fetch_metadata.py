@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -10,12 +11,14 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from exlibris.ebook_meta import EbookMeta, EbookMetaError, apply_opf, parse_opf, set_cover
+from exlibris.config import PROJECT_ROOT, resolve_covers_dir
+from exlibris.ebook_meta import EbookMeta, EbookMetaError, parse_opf
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_COVERS_DIR = PROJECT_ROOT / "covers"
 MIN_COVER_BYTES = 500
 GOOGLE_COVER_ZOOM = 3
+FETCH_PLUGINS = ("Google", "Open Library")
+CALIBRE_FETCH_TIMEOUT = 30
+SUBPROCESS_TIMEOUT = 45
 
 
 class FetchMetadataError(Exception):
@@ -49,14 +52,6 @@ def _authors_for_fetch(authors: str | None) -> str | None:
     if not parts:
         return None
     return " & ".join(parts)
-
-
-def resolve_covers_dir(covers_dir: Path | None = None) -> Path:
-    covers = Path(covers_dir) if covers_dir else DEFAULT_COVERS_DIR
-    if not covers.is_absolute():
-        covers = PROJECT_ROOT / covers
-    covers.mkdir(parents=True, exist_ok=True)
-    return covers.resolve()
 
 
 def _google_books_id_from_opf(opf_xml: str) -> str | None:
@@ -103,13 +98,23 @@ def _fetch_cover_fallback(opf_xml: str, isbn: str | None) -> bytes | None:
     return None
 
 
+def _calibre_subprocess_env(tmp_home: str) -> dict[str, str]:
+    env = {
+        "HOME": tmp_home,
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "QT_QPA_PLATFORM": "offscreen",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    return env
+
+
 def fetch_online_metadata(
     *,
     title: str | None,
     authors: str | None,
     isbn: str | None,
     fetch_cmd: str | None = None,
-    timeout: int = 60,
+    timeout: int = SUBPROCESS_TIMEOUT,
 ) -> tuple[EbookMeta, str, bytes | None]:
     """Return parsed metadata, raw OPF XML, and optional cover image bytes."""
     query_title = (title or "").strip() or None
@@ -129,20 +134,26 @@ def fetch_online_metadata(
         args.extend(["-a", query_authors])
     if query_isbn:
         args.extend(["-i", query_isbn])
-    args.append("-o")
+    for plugin in FETCH_PLUGINS:
+        args.extend(["-p", plugin])
+    args.extend(["-d", str(CALIBRE_FETCH_TIMEOUT), "-o"])
 
-    cover_bytes: bytes | None = None
-    with tempfile.TemporaryDirectory() as tmp:
-        cover_candidate = Path(tmp) / "cover.jpg"
-        args.extend(["-c", str(cover_candidate)])
+    with tempfile.TemporaryDirectory(prefix="exlibris-calibre-") as tmp:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                env=_calibre_subprocess_env(tmp),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise FetchMetadataError(
+                "Timed out fetching metadata online "
+                f"(>{timeout}s). Try again or check network access."
+            ) from exc
 
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
             raise FetchMetadataError(
@@ -153,18 +164,25 @@ def fetch_online_metadata(
         if not opf_xml:
             raise FetchMetadataError("fetch-ebook-metadata returned no metadata")
 
-        if cover_candidate.exists() and cover_candidate.stat().st_size >= MIN_COVER_BYTES:
-            cover_bytes = cover_candidate.read_bytes()
-
     try:
         meta = parse_opf(opf_xml)
     except EbookMetaError as exc:
         raise FetchMetadataError(str(exc)) from exc
 
-    if cover_bytes is None:
-        cover_bytes = _fetch_cover_fallback(opf_xml, meta.isbn or query_isbn)
+    cover_bytes = _fetch_cover_fallback(opf_xml, meta.isbn or query_isbn)
 
     return meta, opf_xml, cover_bytes
+
+
+COVER_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+def _remove_existing_covers(covers_root: Path, book_id: int) -> None:
+    """Remove prior cover files so a new file can be created with only dir write access."""
+    for ext in COVER_EXTENSIONS:
+        path = covers_root / f"{book_id}{ext}"
+        if path.exists():
+            path.unlink()
 
 
 def _save_cover(
@@ -174,34 +192,34 @@ def _save_cover(
     covers_dir: Path | None,
 ) -> str:
     covers_root = resolve_covers_dir(covers_dir)
-    dest = covers_root / f"{book_id}.jpg"
-    dest.write_bytes(cover_bytes)
+    try:
+        _remove_existing_covers(covers_root, book_id)
+        dest = covers_root / f"{book_id}.jpg"
+        dest.write_bytes(cover_bytes)
+    except OSError as exc:
+        raise FetchMetadataError(
+            f"Cannot save cover image: {exc}. "
+            f"The web server needs write permission on {covers_root}."
+        ) from exc
     return str(dest.relative_to(PROJECT_ROOT))
 
 
 def enrich_book_from_online(
-    book_file: Path,
     *,
     title: str | None,
     authors: str | None,
     isbn: str | None,
     book_id: int,
     covers_dir: Path | None = None,
-    ebook_meta_cmd: str | None = None,
     fetch_cmd: str | None = None,
 ) -> FetchResult:
-    """Fetch metadata online, update the ebook file, and return DB field updates."""
-    meta, opf_xml, cover_bytes = fetch_online_metadata(
+    """Fetch metadata online and return database field updates."""
+    meta, _opf_xml, cover_bytes = fetch_online_metadata(
         title=title,
         authors=authors,
         isbn=isbn,
         fetch_cmd=fetch_cmd,
     )
-
-    try:
-        apply_opf(book_file, opf_xml, ebook_meta_cmd=ebook_meta_cmd)
-    except EbookMetaError as exc:
-        raise FetchMetadataError(f"Failed to update ebook file: {exc}") from exc
 
     fields = metadata_db_fields(meta)
     cover_updated = False
@@ -210,14 +228,6 @@ def enrich_book_from_online(
         cover_path = _save_cover(cover_bytes, book_id=book_id, covers_dir=covers_dir)
         fields["cover_path"] = cover_path
         cover_updated = True
-        try:
-            set_cover(
-                book_file,
-                PROJECT_ROOT / cover_path,
-                ebook_meta_cmd=ebook_meta_cmd,
-            )
-        except EbookMetaError as exc:
-            raise FetchMetadataError(f"Failed to embed cover in ebook: {exc}") from exc
 
     return FetchResult(fields=fields, cover_updated=cover_updated)
 

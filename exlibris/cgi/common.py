@@ -43,16 +43,20 @@ def project_root() -> Path:
 def database_path() -> Path:
     env = os.environ.get("EXLIBRIS_DATABASE_PATH")
     if env:
-        return Path(env).expanduser()
+        return Path(env).expanduser().resolve()
     config = project_root() / "config.yaml"
     if config.exists():
         import yaml
 
         data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
         if isinstance(data, dict) and data.get("database_path"):
-            path = Path(data["database_path"])
-            return path if path.is_absolute() else project_root() / path
-    return project_root() / "library.db"
+            from exlibris.config import resolve_database_path
+
+            return resolve_database_path(Path(data["database_path"]))
+    from exlibris.config import DEFAULT_DATABASE_PATH
+
+    DEFAULT_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_DATABASE_PATH
 
 
 def static_href() -> str:
@@ -80,16 +84,19 @@ def fetch_metadata_action() -> str:
 
 
 def allowed_book_file(file_path: str) -> Path | None:
-    """Return resolved ebook path only if it lives under the library books directory."""
+    """Return resolved ebook path only if it lives under a configured books directory."""
+    from exlibris.config import library_books_dirs
+
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
         return None
-    books_dir = (project_root() / "books").resolve()
-    try:
-        path.relative_to(books_dir)
-    except ValueError:
-        return None
-    return path
+    for books_dir in library_books_dirs():
+        try:
+            path.relative_to(books_dir)
+            return path
+        except ValueError:
+            continue
+    return None
 
 
 def connect() -> sqlite3.Connection:
@@ -105,9 +112,20 @@ def connect_rw() -> sqlite3.Connection:
     db = database_path()
     if not db.exists():
         raise FileNotFoundError(f"Library database not found: {db}")
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")
+    except sqlite3.OperationalError as exc:
+        if "readonly" in str(exc).lower() or "unable to open" in str(exc).lower():
+            raise PermissionError(
+                f"Cannot write to database at {db}. The web server user "
+                f"(www-data) needs write permission on the database file and on "
+                f"its parent directory {db.parent} (SQLite WAL files)."
+            ) from exc
+        raise
     return conn
 
 

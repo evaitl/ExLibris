@@ -404,8 +404,13 @@ body {
   cursor: pointer;
 }
 
-.button--fetch:hover {
+.button--fetch:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.button--fetch:disabled {
+  opacity: 0.75;
+  cursor: wait;
 }
 
 .subtitle {

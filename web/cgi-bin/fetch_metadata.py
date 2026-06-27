@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import cgi
 import os
+import sqlite3
 import sys
 import traceback
 from pathlib import Path
@@ -62,7 +63,6 @@ def main() -> None:
                 return
 
             fields = enrich_book_from_online(
-                book_file,
                 title=book.title,
                 authors=book.authors,
                 isbn=book.isbn,
@@ -82,6 +82,26 @@ def main() -> None:
         _html(render_book_detail(book, notice=notice))
     except FileNotFoundError as exc:
         _html(render_error(str(exc), status_hint="Database unavailable"))
+    except PermissionError as exc:
+        with connect() as conn:
+            book = get_book(conn, book_id)
+        if book is None:
+            _html(render_error(str(exc)))
+            return
+        _html(render_book_detail(book, error=str(exc)))
+    except sqlite3.OperationalError as exc:
+        message = str(exc)
+        if "readonly" in message.lower():
+            message = (
+                "Database is read-only for the web server. Grant www-data write "
+                "access to the data/ directory (see scripts/setup-data-dir.sh)."
+            )
+        with connect() as conn:
+            book = get_book(conn, book_id)
+        if book is None:
+            _html(render_error(message))
+            return
+        _html(render_book_detail(book, error=message))
     except FetchMetadataError as exc:
         with connect() as conn:
             book = get_book(conn, book_id)

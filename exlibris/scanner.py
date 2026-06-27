@@ -4,11 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
-from exlibris.database import upsert_book
+from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
+from exlibris.file_hash import sha1_file
+from exlibris.models import Book
 
 SUPPORTED_EXTENSIONS = {".epub"}
 
@@ -59,6 +62,25 @@ def scan_paths(
             stats.scanned += 1
             try:
                 stat = file_path.stat()
+                content_hash = sha1_file(file_path)
+                file_path_str = str(file_path)
+
+                existing = session.scalar(
+                    select(Book).where(Book.file_path == file_path_str)
+                )
+                canonical = find_book_by_content_hash(session, content_hash)
+                if canonical is not None and (
+                    existing is None or canonical.id != existing.id
+                ):
+                    stats.skipped += 1
+                    if verbose:
+                        print(
+                            f"duplicate: {file_path.name} "
+                            f"(same as {canonical.file_path})",
+                            flush=True,
+                        )
+                    continue
+
                 meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
                 if meta.errors and verbose:
                     stats.errors.extend(
@@ -68,11 +90,12 @@ def scan_paths(
                 book = upsert_book(
                     session,
                     {
-                        "file_path": str(file_path),
+                        "file_path": file_path_str,
                         "file_name": file_path.name,
                         "format": meta.format or file_path.suffix.lower().lstrip("."),
                         "file_size": stat.st_size,
                         "file_mtime": stat.st_mtime,
+                        "content_hash": content_hash,
                         "title": meta.title or file_path.stem,
                         "sort_title": meta.sort_title,
                         "authors": meta.authors,
