@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from exlibris.ebook_meta import EbookMeta, EbookMetaError, parse_opf
@@ -17,6 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
 
 MIN_COVER_BYTES = 500
+MIN_COVER_WIDTH = 100
+MIN_COVER_HEIGHT = 100
 GOOGLE_COVER_ZOOM = 3
 FETCH_PLUGINS = ("Google", "Open Library")
 CALIBRE_FETCH_TIMEOUT = 30
@@ -83,14 +85,78 @@ def _google_books_id_from_opf(opf_xml: str) -> str | None:
     return None
 
 
-def _download_cover_url(url: str) -> bytes | None:
+def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
+    index = 2
+    while index < len(data) - 8:
+        if data[index] != 0xFF:
+            index += 1
+            continue
+        marker = data[index + 1]
+        if marker in (
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        ):
+            height = int.from_bytes(data[index + 5 : index + 7], "big")
+            width = int.from_bytes(data[index + 7 : index + 9], "big")
+            return width, height
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            index += 2
+            continue
+        segment_length = int.from_bytes(data[index + 2 : index + 4], "big")
+        index += 2 + segment_length
+    return None
+
+
+def _image_dimensions(data: bytes) -> tuple[int, int] | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        width = int.from_bytes(data[16:20], "big")
+        height = int.from_bytes(data[20:24], "big")
+        return width, height
+    if (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")) and len(data) >= 10:
+        width = int.from_bytes(data[6:8], "little")
+        height = int.from_bytes(data[8:10], "little")
+        return width, height
+    if data.startswith(b"\xff\xd8"):
+        return _jpeg_dimensions(data)
+    return None
+
+
+def _is_usable_cover(data: bytes) -> bool:
+    """Reject Open Library / Google placeholder images (often 1x1 transparent GIF)."""
+    if len(data) < MIN_COVER_BYTES:
+        return False
+    dimensions = _image_dimensions(data)
+    if dimensions is None:
+        return False
+    width, height = dimensions
+    return width >= MIN_COVER_WIDTH and height >= MIN_COVER_HEIGHT
+
+
+def _download_cover_url(url: str, *, reject_default: bool = False) -> bytes | None:
+    if reject_default and "default=false" not in url:
+        url = f"{url}{'&' if '?' in url else '?'}default=false"
     request = Request(url, headers={"User-Agent": "ExLibris/0.1"})
     try:
         with urlopen(request, timeout=30) as response:
             data = response.read()
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        return None
     except URLError:
         return None
-    if len(data) < MIN_COVER_BYTES:
+    if not _is_usable_cover(data):
         return None
     return data
 
@@ -109,7 +175,7 @@ def _fetch_cover_fallback(opf_xml: str, isbn: str | None) -> bytes | None:
     if isbn:
         clean_isbn = isbn.replace("-", "").strip()
         url = f"https://covers.openlibrary.org/b/isbn/{clean_isbn}-L.jpg"
-        cover = _download_cover_url(url)
+        cover = _download_cover_url(url, reject_default=True)
         if cover:
             return cover
 
