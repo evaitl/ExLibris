@@ -11,14 +11,32 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from exlibris.config import PROJECT_ROOT, resolve_covers_dir
 from exlibris.ebook_meta import EbookMeta, EbookMetaError, parse_opf
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
 
 MIN_COVER_BYTES = 500
 GOOGLE_COVER_ZOOM = 3
 FETCH_PLUGINS = ("Google", "Open Library")
 CALIBRE_FETCH_TIMEOUT = 30
 SUBPROCESS_TIMEOUT = 45
+
+
+def _resolve_covers_dir(path: Path | None = None) -> Path:
+    if path is not None:
+        covers = Path(path).expanduser()
+        if not covers.is_absolute():
+            covers = PROJECT_ROOT / covers
+    else:
+        env = os.environ.get("EXLIBRIS_COVERS_DIR")
+        if env:
+            covers = Path(env).expanduser()
+        else:
+            covers = DEFAULT_COVERS_DIR
+    covers = covers.resolve()
+    covers.mkdir(parents=True, exist_ok=True)
+    return covers
 
 
 class FetchMetadataError(Exception):
@@ -191,7 +209,7 @@ def _save_cover(
     book_id: int,
     covers_dir: Path | None,
 ) -> str:
-    covers_root = resolve_covers_dir(covers_dir)
+    covers_root = _resolve_covers_dir(covers_dir)
     try:
         _remove_existing_covers(covers_root, book_id)
         dest = covers_root / f"{book_id}.jpg"

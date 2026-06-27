@@ -214,7 +214,23 @@ Open **http://localhost/exlibris/**.
 
 #### 4. Python environment
 
-CGI scripts use `#!/usr/bin/env python3` and add the project root to `sys.path` automatically. System Python 3.11+ is sufficient for the web UI.
+CGI scripts use `#!/usr/bin/env python3` and add the project root to `sys.path`. Browsing the library uses only the Python standard library (plus SQLite). **Fetch metadata online** uses the same — no extra pip packages are required for the web UI.
+
+The scanner CLI (`exlibris scan`) still needs the project venv:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Fetch metadata also needs Calibre's `fetch-ebook-metadata` on `PATH` for the Apache user (`www-data`). Quick check:
+
+```bash
+sudo -u www-data fetch-ebook-metadata --version
+```
+
+If that fails, install Calibre system-wide or symlink the binary into `/usr/local/bin`.
 
 ## Configuration
 
