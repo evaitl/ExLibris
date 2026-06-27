@@ -14,7 +14,6 @@ from exlibris.cgi.common import (
     format_published_date,
     format_size,
     has_search_filters,
-    should_list_books,
     static_asset,
     static_href,
 )
@@ -227,21 +226,7 @@ def render_library(
         for key in ("title", "author", "published", "size", "scanned", "random")
     }
 
-    browsing = should_list_books(
-        title=selected_title,
-        author=selected_author,
-        publisher=selected_publisher,
-        genre=selected_genre,
-        language=selected_language,
-        sort=sort,
-    )
-
-    if not browsing:
-        collection = f"""    <div class="empty-state">
-      <h2>Search your library</h2>
-      <p>{_format_count(library_total)} books indexed. Enter a title, author, publisher, genre, or language above, or choose <strong>Random</strong> sort to browse.</p>
-    </div>"""
-    elif books:
+    if books:
         cards = "\n".join(_book_card(book) for book in books)
         pagination = _pagination_nav(
             page=page,
@@ -257,21 +242,28 @@ def render_library(
 {cards}
     </ul>
 {pagination}"""
+    elif library_total == 0:
+        collection = """    <div class="empty-state">
+      <h2>No books in library</h2>
+      <p>Run <code>python scan_books.py</code> or <code>exlibris scan</code> to index your collection.</p>
+    </div>"""
     else:
         collection = """    <div class="empty-state">
       <h2>No books found</h2>
       <p>Try different search terms or clear filters.</p>
     </div>"""
 
-    if browsing and sort == "random" and filtered_count:
+    filtered = has_search_filters(
+        title=selected_title,
+        author=selected_author,
+        publisher=selected_publisher,
+        genre=selected_genre,
+        language=selected_language,
+    )
+
+    if sort == "random" and filtered_count:
         shown = len(books)
-        if has_search_filters(
-            title=selected_title,
-            author=selected_author,
-            publisher=selected_publisher,
-            genre=selected_genre,
-            language=selected_language,
-        ):
+        if filtered:
             stats = (
                 f"{shown:,} random books from {filtered_count:,} matches "
                 f"· {_format_count(library_total)} in library"
@@ -280,20 +272,23 @@ def render_library(
             stats = (
                 f"{shown:,} random books · {_format_count(library_total)} in library"
             )
-    elif browsing and filtered_count:
+    elif filtered_count:
         start = (page - 1) * PAGE_SIZE + 1
         end = min(page * PAGE_SIZE, filtered_count)
-        stats = (
-            f"Showing {start:,}–{end:,} of {filtered_count:,} matches "
-            f"· {_format_count(library_total)} in library"
-        )
-    elif browsing:
-        stats = f"No matches · {_format_count(library_total)} in library"
+        if filtered:
+            stats = (
+                f"Showing {start:,}–{end:,} of {filtered_count:,} matches "
+                f"· {_format_count(library_total)} in library"
+            )
+        else:
+            stats = f"Showing {start:,}–{end:,} of {_format_count(library_total)} in library"
+    elif library_total == 0:
+        stats = "No books indexed yet"
     else:
-        stats = f"{_format_count(library_total)} books in library"
+        stats = f"No matches · {_format_count(library_total)} in library"
 
     pagination_script = ""
-    if browsing and filtered_count and (sort == "random" or filtered_count > PAGE_SIZE):
+    if filtered_count and (sort == "random" or filtered_count > PAGE_SIZE):
         pagination_script = (
             f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
         )

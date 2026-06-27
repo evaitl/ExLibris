@@ -311,24 +311,6 @@ def has_search_filters(
     )
 
 
-def should_list_books(
-    *,
-    title: str = "",
-    author: str = "",
-    publisher: str = "",
-    genre: str = "",
-    language: str = "",
-    sort: str = "title",
-) -> bool:
-    return has_search_filters(
-        title=title,
-        author=author,
-        publisher=publisher,
-        genre=genre,
-        language=language,
-    ) or sort == "random"
-
-
 def _book_filter_clause(
     *,
     title: str,
@@ -397,16 +379,6 @@ def list_books(
         conn.execute("SELECT COUNT(*) FROM books WHERE is_missing = 0").fetchone()[0]
     )
     options = load_filter_options(conn)
-
-    if not should_list_books(
-        title=title,
-        author=author,
-        publisher=publisher,
-        genre=genre,
-        language=language,
-        sort=sort,
-    ):
-        return [], 0, library_total, 1, options
 
     where, params, order_by = _book_filter_clause(
         title=title,
