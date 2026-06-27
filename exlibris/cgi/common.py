@@ -9,6 +9,20 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
+from exlibris.auth import (
+    SESSION_COOKIE,
+    create_session_token,
+    parse_cookie_header,
+    parse_session_token,
+    session_secret,
+)
+
+
+@dataclass(frozen=True)
+class UserRow:
+    id: int
+    username: str
+
 
 @dataclass(frozen=True)
 class BookRow:
@@ -122,6 +136,22 @@ def fetch_metadata_action() -> str:
 
 def restore_cover_action() -> str:
     return cgi_script("restore_cover.py")
+
+
+def login_action() -> str:
+    return cgi_script("login.py")
+
+
+def register_action() -> str:
+    return cgi_script("register.py")
+
+
+def logout_action() -> str:
+    return cgi_script("logout.py")
+
+
+def favorite_action() -> str:
+    return cgi_script("favorite.py")
 
 
 def cover_cache_version(book: BookRow) -> str:
@@ -350,6 +380,7 @@ def has_search_filters(
     publisher: str = "",
     genre: str = "",
     language: str = "",
+    favorites_only: bool = False,
 ) -> bool:
     return bool(
         title.strip()
@@ -357,7 +388,93 @@ def has_search_filters(
         or publisher.strip()
         or genre.strip()
         or language
+        or favorites_only
     )
+
+
+def get_current_user(conn: sqlite3.Connection) -> UserRow | None:
+    cookie_header = os.environ.get("HTTP_COOKIE", "")
+    token = parse_cookie_header(cookie_header, SESSION_COOKIE)
+    if not token:
+        return None
+    secret = session_secret(fallback_seed=str(database_path()))
+    parsed = parse_session_token(token, secret=secret)
+    if parsed is None:
+        return None
+    user_id, username = parsed
+    row = conn.execute(
+        "SELECT id, username FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None or row["username"] != username:
+        return None
+    return UserRow(id=int(row["id"]), username=str(row["username"]))
+
+
+def authenticate_user(
+    conn: sqlite3.Connection, *, username: str, password: str
+) -> UserRow | None:
+    """Verify credentials against the stored scrypt hash (plain passwords are never kept)."""
+    row = conn.execute(
+        "SELECT id, username, password_hash FROM users WHERE username = ? COLLATE NOCASE",
+        (username.strip(),),
+    ).fetchone()
+    if row is None:
+        return None
+    from exlibris.auth import verify_password
+
+    if not verify_password(password, row["password_hash"]):
+        return None
+    return UserRow(id=int(row["id"]), username=str(row["username"]))
+
+
+def create_session_for_user(user: UserRow) -> str:
+    secret = session_secret(fallback_seed=str(database_path()))
+    return create_session_token(user_id=user.id, username=user.username, secret=secret)
+
+
+def is_favorite(conn: sqlite3.Connection, *, user_id: int, book_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM user_favorites
+        WHERE user_id = ? AND book_id = ?
+        """,
+        (user_id, book_id),
+    ).fetchone()
+    return row is not None
+
+
+def set_favorite(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    book_id: int,
+    favorite: bool,
+) -> None:
+    if favorite:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_favorites (user_id, book_id)
+            VALUES (?, ?)
+            """,
+            (user_id, book_id),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM user_favorites WHERE user_id = ? AND book_id = ?",
+            (user_id, book_id),
+        )
+    conn.commit()
+
+
+def book_detail_context(
+    conn: sqlite3.Connection, book_id: int
+) -> tuple[UserRow | None, bool]:
+    user = get_current_user(conn)
+    favorite = (
+        is_favorite(conn, user_id=user.id, book_id=book_id) if user is not None else False
+    )
+    return user, favorite
 
 
 def _book_filter_clause(
@@ -369,10 +486,18 @@ def _book_filter_clause(
     language: str,
     sort: str,
     sort_dir: str = "asc",
+    favorites_only: bool = False,
+    user_id: int | None = None,
 ) -> tuple[list[str], list[object], str]:
     order_by = sort_order_by(sort, sort_dir)
     params: list[object] = []
     where: list[str] = ["is_missing = 0"]
+
+    if favorites_only and user_id is not None:
+        where.append(
+            "id IN (SELECT book_id FROM user_favorites WHERE user_id = ?)"
+        )
+        params.append(user_id)
 
     if title.strip():
         _append_word_match(
@@ -425,6 +550,8 @@ def list_books(
     sort_dir: str = "asc",
     page: int = 1,
     page_size: int | str = DEFAULT_PAGE_SIZE,
+    favorites_only: bool = False,
+    user_id: int | None = None,
 ) -> tuple[list[BookRow], int, int, int, FilterOptions]:
     """Return books, filtered_count, library_total, current_page, filter_options."""
     sort_dir = normalize_sort_dir(sort, sort_dir)
@@ -442,6 +569,8 @@ def list_books(
         language=language,
         sort=sort,
         sort_dir=sort_dir,
+        favorites_only=favorites_only,
+        user_id=user_id,
     )
     where_sql = " AND ".join(where)
 

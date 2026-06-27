@@ -8,12 +8,17 @@ from exlibris.cgi.common import (
     PAGE_SIZE_OPTIONS,
     BookRow,
     FilterOptions,
+    UserRow,
     cgi_script,
     cover_cache_version,
     cover_href,
     download_href,
     esc,
+    favorite_action,
     fetch_metadata_action,
+    login_action,
+    logout_action,
+    register_action,
     restore_cover_action,
     format_published_date,
     format_size,
@@ -25,7 +30,21 @@ from exlibris.cgi.common import (
 )
 
 
-def page_shell(title: str, body: str) -> str:
+def _header_auth(current_user: UserRow | None) -> str:
+    if current_user is None:
+        return f"""      <nav class="auth-nav">
+        <a href="{esc(login_action())}">Log in</a>
+        <a href="{esc(register_action())}">Create account</a>
+      </nav>"""
+    return f"""      <nav class="auth-nav">
+        <span class="auth-nav__user">Signed in as {esc(current_user.username)}</span>
+        <form class="auth-nav__logout" method="post" action="{esc(logout_action())}">
+          <button type="submit">Log out</button>
+        </form>
+      </nav>"""
+
+
+def page_shell(title: str, body: str, *, current_user: UserRow | None = None) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,6 +58,7 @@ def page_shell(title: str, body: str) -> str:
     <div class="container header-inner">
       <a class="brand" href="{esc(cgi_script('index.py'))}">ExLibris</a>
       <span class="tagline">Your personal ebook library</span>
+{_header_auth(current_user)}
     </div>
   </header>
   <main class="container">
@@ -91,6 +111,7 @@ def _filter_query(
     sort_dir: str,
     page_size: int,
     page: int | None = None,
+    favorites_only: bool = False,
 ) -> str:
     params: dict[str, str] = {}
     if title:
@@ -103,6 +124,8 @@ def _filter_query(
         params["genre"] = genre
     if language:
         params["language"] = language
+    if favorites_only:
+        params["favorites"] = "1"
     if sort and sort != "title":
         params["sort"] = sort
     if sort_dir != DEFAULT_SORT_DIR.get(sort, "asc"):
@@ -125,8 +148,11 @@ def _filter_hidden_inputs(
     sort: str,
     sort_dir: str,
     page_size: int,
+    favorites_only: bool = False,
 ) -> str:
     lines = [f'    <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">']
+    if favorites_only:
+        lines.append('    <input type="hidden" name="favorites" value="1">')
     if title:
         lines.append(f'    <input type="hidden" name="title" value="{esc(title)}">')
     if author:
@@ -197,6 +223,7 @@ def _pagination_nav(
     language: str,
     sort: str,
     sort_dir: str,
+    favorites_only: bool = False,
 ) -> str:
     base = cgi_script("index.py")
     common = dict(
@@ -208,6 +235,7 @@ def _pagination_nav(
         sort=sort,
         sort_dir=sort_dir,
         page_size=page_size,
+        favorites_only=favorites_only,
     )
     hiddens = _filter_hidden_inputs(
         title=title,
@@ -218,6 +246,7 @@ def _pagination_nav(
         sort=sort,
         sort_dir=sort_dir,
         page_size=page_size,
+        favorites_only=favorites_only,
     )
 
     if sort == "random":
@@ -315,6 +344,8 @@ def render_library(
     sort: str,
     sort_dir: str,
     page_size: int,
+    favorites_only: bool = False,
+    current_user: UserRow | None = None,
 ) -> str:
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
@@ -336,6 +367,7 @@ def render_library(
             language=selected_language,
             sort=sort,
             sort_dir=sort_dir,
+            favorites_only=favorites_only,
         )
         collection = f"""{pagination}    <ul class="book-grid">
 {cards}
@@ -358,6 +390,7 @@ def render_library(
         publisher=selected_publisher,
         genre=selected_genre,
         language=selected_language,
+        favorites_only=favorites_only,
     )
 
     if sort == "random" and filtered_count:
@@ -374,13 +407,17 @@ def render_library(
     elif filtered_count:
         start = (page - 1) * page_size + 1
         end = min(page * page_size, filtered_count)
+        favorites_note = " · favorites" if favorites_only else ""
         if filtered:
             stats = (
-                f"Showing {start:,}–{end:,} of {filtered_count:,} matches "
-                f"· {_format_count(library_total)} in library"
+                f"Showing {start:,}–{end:,} of {filtered_count:,} matches"
+                f"{favorites_note} · {_format_count(library_total)} in library"
             )
         else:
-            stats = f"Showing {start:,}–{end:,} of {_format_count(library_total)} in library"
+            stats = (
+                f"Showing {start:,}–{end:,} of {_format_count(library_total)} in library"
+                f"{favorites_note}"
+            )
     elif library_total == 0:
         stats = "No books indexed yet"
     else:
@@ -388,7 +425,28 @@ def render_library(
 
     pagination_script = f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
 
-    clear_url = esc(cgi_script("index.py"))
+    clear_url = esc(
+        cgi_script("index.py")
+        + _filter_query(
+            title="",
+            author="",
+            publisher="",
+            genre="",
+            language="",
+            sort="title",
+            sort_dir=DEFAULT_SORT_DIR["title"],
+            page_size=DEFAULT_PAGE_SIZE,
+            favorites_only=False,
+        )
+    )
+    favorites_checked = " checked" if favorites_only else ""
+    favorites_filter = ""
+    if current_user is not None:
+        favorites_filter = f"""          <label class="filter-favorites">
+            <input type="checkbox" name="favorites" value="1"{favorites_checked} data-filter-auto>
+            Favorites only
+          </label>
+"""
     body = f"""    <section class="toolbar">
       <form id="library-filter-form" class="filter-form filter-form--compact" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
         <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">
@@ -400,7 +458,7 @@ def render_library(
           <select class="filter-input" name="language" aria-label="Filter by language" data-filter-auto>
 {_select_options(options.languages, selected_language, "Language")}
           </select>
-          <div class="sort-controls">
+{favorites_filter}          <div class="sort-controls">
             <select class="filter-input" name="sort" aria-label="Sort by" data-filter-auto>
               <option value="title"{sort_selected["title"]}>Title</option>
               <option value="author"{sort_selected["author"]}>Author</option>
@@ -427,7 +485,70 @@ def render_library(
 {collection}
 {_keyboard_help_dialog()}{pagination_script}
 """
-    return page_shell("Library", body)
+    return page_shell("Library", body, current_user=current_user)
+
+
+def render_login(*, next_url: str = "", error: str = "") -> str:
+    flash = ""
+    if error:
+        flash = f"""      <p class="flash flash--error">{esc(error)}</p>
+"""
+    next_input = ""
+    register_href = register_action()
+    if next_url:
+        next_input = f'        <input type="hidden" name="next" value="{esc(next_url)}">\n'
+        register_href = f"{register_action()}?{urlencode({'next': next_url})}"
+    body = f"""    <section class="auth-panel">
+      <h1>Log in</h1>
+{flash}      <form class="auth-form" method="post" action="{esc(login_action())}">
+{next_input}        <label>
+          Username
+          <input class="filter-input" type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>
+          Password
+          <input class="filter-input" type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="button button--download">Log in</button>
+      </form>
+      <p class="auth-panel__hint">No account yet? <a href="{esc(register_href)}">Create one</a> · <a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+    </section>
+"""
+    return page_shell("Log in", body)
+
+
+def render_register(*, next_url: str = "", error: str = "", username: str = "") -> str:
+    flash = ""
+    if error:
+        flash = f"""      <p class="flash flash--error">{esc(error)}</p>
+"""
+    next_input = ""
+    login_href = login_action()
+    if next_url:
+        next_input = f'        <input type="hidden" name="next" value="{esc(next_url)}">\n'
+        login_href = f"{login_action()}?{urlencode({'next': next_url})}"
+    body = f"""    <section class="auth-panel">
+      <h1>Create account</h1>
+      <p class="auth-panel__intro">Accounts are only needed to save favorites. Browsing the library does not require an account.</p>
+{flash}      <form class="auth-form" method="post" action="{esc(register_action())}">
+{next_input}        <label>
+          Username
+          <input class="filter-input" type="text" name="username" value="{esc(username)}" autocomplete="username" required maxlength="64">
+        </label>
+        <label>
+          Password
+          <input class="filter-input" type="password" name="password" autocomplete="new-password" required>
+        </label>
+        <label>
+          Confirm password
+          <input class="filter-input" type="password" name="password_confirm" autocomplete="new-password" required>
+        </label>
+        <button type="submit" class="button button--download">Create account</button>
+      </form>
+      <p class="auth-panel__hint">Already have an account? <a href="{esc(login_href)}">Log in</a> · <a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+    </section>
+"""
+    return page_shell("Create account", body)
 
 
 def _book_card(book: BookRow) -> str:
@@ -459,6 +580,8 @@ def render_book_detail(
     *,
     notice: str = "",
     error: str = "",
+    current_user: UserRow | None = None,
+    is_favorite: bool = False,
 ) -> str:
     title = book.title or book.file_name
     subtitle = (
@@ -515,6 +638,22 @@ def render_book_detail(
               </form>
 """
 
+    favorite_form = ""
+    if current_user is not None:
+        checked = " checked" if is_favorite else ""
+        favorite_form = f"""            <form class="favorite-form" method="post" action="{esc(favorite_action())}">
+              <input type="hidden" name="id" value="{book.id}">
+              <input type="hidden" name="favorite" value="0">
+              <label class="favorite-toggle">
+                <input type="checkbox" name="favorite" value="1"{checked} onchange="this.form.submit()">
+                Favorite
+              </label>
+            </form>
+"""
+    else:
+        favorite_form = f"""            <p class="favorite-login"><a href="{esc(login_action())}?next=book.py%3Fid%3D{book.id}">Log in</a> or <a href="{esc(register_action())}?next=book.py%3Fid%3D{book.id}">create an account</a> to save favorites</p>
+"""
+
     body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
 {flash}
     <article class="book-detail">
@@ -524,7 +663,7 @@ def render_book_detail(
           <header class="book-detail__header">
             <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
             <h1>{esc(title)}</h1>
-{subtitle}            <p class="book-actions">
+{subtitle}{favorite_form}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
               <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">
@@ -543,7 +682,7 @@ def render_book_detail(
       </div>
     </article>
 """
-    return page_shell(title, body)
+    return page_shell(title, body, current_user=current_user)
 
 
 def render_error(message: str, *, status_hint: str = "Error") -> str:

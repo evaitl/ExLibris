@@ -5,11 +5,15 @@ import typer
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
 from exlibris.database import get_engine, init_db
 from exlibris.scanner import scan_paths
+from exlibris.users import UserError, register_user
 
 app = typer.Typer(
     no_args_is_help=True,
     help="ExLibris — scan ebook directories and browse your library.",
 )
+
+user_app = typer.Typer(no_args_is_help=True, help="Manage library user accounts.")
+app.add_typer(user_app, name="user")
 
 
 @app.command()
@@ -52,6 +56,45 @@ def scan(
         typer.echo(f"{len(stats.errors)} issue(s):")
         for err in stats.errors:
             typer.echo(f"  - {err}")
+
+
+@user_app.command("create")
+def user_create(
+    username: str = typer.Argument(help="Login username"),
+    password: str = typer.Option(
+        ...,
+        prompt=True,
+        hide_input=True,
+        confirmation_prompt=True,
+        help="Account password",
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config.yaml"
+    ),
+) -> None:
+    """Create a web login account."""
+    cleaned = username.strip()
+    if not cleaned:
+        typer.echo("Username cannot be empty.")
+        raise typer.Exit(code=1)
+
+    settings = load_settings(config)
+    db_path = resolve_database_path(settings.database_path)
+    engine = get_engine(db_path)
+    init_db(engine)
+
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        register_user(conn, username=cleaned, password=password)
+    except UserError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+
+    typer.echo(f"Created user {cleaned!r}.")
 
 
 if __name__ == "__main__":

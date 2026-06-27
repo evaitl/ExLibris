@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from exlibris.cgi.common import connect, list_books
+from exlibris.cgi.common import connect, get_current_user, list_books
 from exlibris.cgi.render import render_error, render_library
 
 
@@ -30,6 +30,10 @@ def main() -> None:
 
     try:
         with connect() as conn:
+            current_user = get_current_user(conn)
+            favorites_only = (
+                form.getfirst("favorites") == "1" and current_user is not None
+            )
             books, filtered_count, library_total, page, options = list_books(
                 conn,
                 title=title,
@@ -41,6 +45,8 @@ def main() -> None:
                 sort_dir=sort_dir,
                 page=page,
                 page_size=raw_page_size,
+                favorites_only=favorites_only,
+                user_id=current_user.id if current_user else None,
             )
         html = render_library(
             books,
@@ -56,6 +62,8 @@ def main() -> None:
             sort=sort,
             sort_dir=sort_dir,
             page_size=raw_page_size,
+            favorites_only=favorites_only,
+            current_user=current_user,
         )
         print("Content-Type: text/html; charset=utf-8")
         print()

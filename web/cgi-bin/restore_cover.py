@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from exlibris.cgi.common import (
     allowed_book_file,
+    book_detail_context,
     connect,
     connect_rw,
     get_book,
@@ -54,10 +55,14 @@ def main() -> None:
 
             book_file = allowed_book_file(book.file_path)
             if book_file is None:
+                with connect() as read_conn:
+                    current_user, is_favorite = book_detail_context(read_conn, book_id)
                 _html(
                     render_book_detail(
                         book,
                         error="Book file is not available for cover restore",
+                        current_user=current_user,
+                        is_favorite=is_favorite,
                     )
                 )
                 return
@@ -70,20 +75,36 @@ def main() -> None:
 
         with connect() as conn:
             book = get_book(conn, book_id)
+            current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error("Book not found after update.", status_hint="Not found"))
             return
 
-        _html(render_book_detail(book, notice="Cover restored from ebook file"))
+        _html(
+            render_book_detail(
+                book,
+                notice="Cover restored from ebook file",
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
     except FileNotFoundError as exc:
         _html(render_error(str(exc), status_hint="Database unavailable"))
     except PermissionError as exc:
         with connect() as conn:
             book = get_book(conn, book_id)
+            current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(str(exc)))
             return
-        _html(render_book_detail(book, error=str(exc)))
+        _html(
+            render_book_detail(
+                book,
+                error=str(exc),
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
     except sqlite3.OperationalError as exc:
         message = str(exc)
         if "readonly" in message.lower():
@@ -93,26 +114,50 @@ def main() -> None:
             )
         with connect() as conn:
             book = get_book(conn, book_id)
+            current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(message))
             return
-        _html(render_book_detail(book, error=message))
+        _html(
+            render_book_detail(
+                book,
+                error=message,
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
     except FetchMetadataError as exc:
         with connect() as conn:
             book = get_book(conn, book_id)
+            current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(str(exc)))
             return
-        _html(render_book_detail(book, error=str(exc)))
+        _html(
+            render_book_detail(
+                book,
+                error=str(exc),
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
     except Exception:
         detail = traceback.format_exc()
         sys.stderr.write(detail)
         with connect() as conn:
             book = get_book(conn, book_id)
+            current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error("Unexpected error while restoring cover."))
             return
-        _html(render_book_detail(book, error="Unexpected error while restoring cover."))
+        _html(
+            render_book_detail(
+                book,
+                error="Unexpected error while restoring cover.",
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
 
 
 if __name__ == "__main__":
