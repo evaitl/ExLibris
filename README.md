@@ -145,12 +145,14 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 ### Web UI features
 
-- Search by title, author, publisher, genre, and language
-- Configurable page size (10, 25, 50, 100, or 200 books per page)
-- Debounced search, jump-to-page, and keyboard shortcuts (<kbd>?</kbd> for help)
-- Title and author filters use case-insensitive substring search
-- Book detail pages with cover, metadata, HTML descriptions, download, and **Fetch metadata online**
-- The fetch button shows “Fetching…” while the request is in progress
+- **Search** by title, author, publisher, genre (tags), and language — each word in a field must match (case-insensitive)
+- **Pagination** with configurable page size (10, 25, 50, 100, or 200)
+- **Jump to page** and **sort** by title, author, published date, size, last scanned, or random
+- **Sort direction** (↑/↓) to reverse order
+- **Debounced search** — filters apply automatically ~1s after you stop typing
+- **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page)
+- Book detail pages with cover, formatted dates, file name, HTML descriptions, download, and **Fetch metadata online**
+- Fetch updates metadata only; existing covers are kept when online sources return no real image
 
 ### CGI environment variables
 
@@ -159,6 +161,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 | `EXLIBRIS_DATABASE_PATH` | Path to `data/library.db` |
 | `EXLIBRIS_CGI_PREFIX` | URL prefix for CGI scripts (e.g. `/exlibris/cgi-bin/`) |
 | `EXLIBRIS_STATIC_URL` | URL to the CSS file (e.g. `/exlibris/static/style.css`) |
+| `EXLIBRIS_COVERS_DIR` | Path to cover images (set automatically in `apache/exlibris.conf`) |
 
 Downloads are served only from files under configured scan paths (default: `/media/books`). Fetch metadata updates the database and cover images only — EPUB files are not modified.
 
@@ -197,7 +200,7 @@ Follow the script output to grant `www-data` write access to `data/` only (group
 
 #### 3. Add the path-based configuration
 
-Edit `EXLIBRIS_ROOT` in `apache/exlibris.conf` if needed, then:
+Edit `EXLIBRIS_ROOT` in `apache/exlibris.conf` to the **actual install path on the server** (for example `/opt/exlibris` or `/media/books/ExLibris`), then:
 
 ```bash
 sudo cp apache/exlibris.conf /etc/apache2/conf-available/exlibris.conf
@@ -206,15 +209,24 @@ sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
+`apache2ctl configtest` should not warn that `ScriptAlias` is overridden by `Alias`. The shipped config lists `ScriptAlias` before `Alias`.
+
 Open **http://localhost/exlibris/**.
 
-| Variable | Example value |
-|----------|----------------|
-| `EXLIBRIS_CGI_PREFIX` | `/exlibris/cgi-bin/` |
-| `EXLIBRIS_STATIC_URL` | `/exlibris/static/style.css` |
-| `EXLIBRIS_DATABASE_PATH` | `/path/to/ExLibris/data/library.db` |
+#### 4. Permissions for `www-data`
 
-#### 4. Python environment
+The Apache user needs read access to the install tree and `/media/books`, and **write access only on `data/`**:
+
+```bash
+sudo usermod -aG yourgroup www-data
+chmod 2775 data/ data/covers
+chmod g+rw data/library.db data/library.db-wal data/library.db-shm
+sudo systemctl restart apache2
+```
+
+If the install lives under your home directory, `www-data` must be able to traverse each parent directory, or move the install elsewhere.
+
+#### 5. Python environment
 
 CGI scripts use `#!/usr/bin/env python3` and add the project root to `sys.path`. Browsing the library uses only the Python standard library (plus SQLite). **Fetch metadata online** uses the same — no extra pip packages are required for the web UI.
 
@@ -252,6 +264,8 @@ Environment variables (prefix `EXLIBRIS_`) override config values, for example `
 2. **Web UI** (`web/cgi-bin/`) reads the database and displays the collection.
 
 Scanning and serving are separate processes, so you can re-index on a schedule without restarting the web server.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation history and server deployment notes.
 
 ## License
 

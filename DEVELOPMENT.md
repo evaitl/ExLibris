@@ -1,6 +1,6 @@
 # ExLibris Development Log
 
-This document records the design and implementation history from the initial build session (June 2026). It captures what was built, why, and how the project evolved through iterative requests.
+This document records design and implementation history. It captures what was built, why, and how the project evolved through iterative requests.
 
 **Repository:** https://github.com/evaitl/ExLibris  
 **Initial commit:** `b23d9f2` — *Initial ExLibris release: EPUB library scanner and web UI.*
@@ -26,13 +26,14 @@ The scanner and web server are separate concerns: scan once (or incrementally), 
 data/               ← runtime data (gitignored)
   library.db
   covers/
+  scan.log
 scan_books.py       ← standalone scan entry point
 exlibris/
   schema/           ← SQL migrations (001–004)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
   ebook_meta.py     ← Calibre ebook-meta wrapper
-  fetch_metadata.py ← online metadata fetch (DB only)
+  fetch_metadata.py ← online metadata fetch (DB + covers only)
   file_hash.py      ← SHA-1 for duplicate detection
   scanner.py        ← directory walk, per-book commit, dedup by hash
   cgi/              ← shared query/render helpers for CGI
@@ -40,218 +41,163 @@ apache/
   exlibris.conf     ← path-based Apache config (/exlibris/)
 scripts/
   setup-data-dir.sh ← create/migrate data/ directory
+  scan-library.sh   ← cron-friendly scan wrapper
 web/
   cgi-bin/          ← index, book, cover, download, fetch_metadata
-  static/style.css
+  static/
+    style.css
+    library.js      ← debounced search, keyboard shortcuts, sort arrows
 ```
 
 ### Data flow
 
 1. **Scan:** walks `/media/books` (or configured paths), SHA-1 each file, skips duplicates, calls `ebook-meta`, upserts `data/library.db`, saves covers to `data/covers/`.
-2. **Browse:** CGI scripts read the database and render HTML.
+2. **Browse:** CGI scripts read the database and render HTML with server-side pagination.
 3. **Download:** serves EPUBs only if the path is under a configured scan directory.
 4. **Fetch metadata online:** queries Calibre `fetch-ebook-metadata`, updates the database and cover images only (EPUB files unchanged).
 
 ---
 
-## Session Timeline
+## Session 1 — Initial build (June 2026)
 
-### 1. Project bootstrap
+### Bootstrap through first release
 
-**Request:** Scan epub, mobi, azw3, and pdf; store metadata in SQLite; display via web server.
+- SQLite schema with FTS5 (`001_initial.sql`)
+- Scanner using Calibre `ebook-meta` (replaced pure-Python extractors)
+- CGI web UI: library grid, book detail, covers, download
+- Filters: title, author, publisher, genre (tags), language
+- Covers (`002_covers.sql`), tags (`003_tags.sql`)
+- EPUB-only scanner; FastAPI viewer removed in favor of CGI only
+- Incremental scan with WAL mode for live UI updates during long scans
+- Sort by title, author, published date, size, last scanned
+- Apache path-based deployment documented
+- Initial push to https://github.com/evaitl/ExLibris.git
 
-Initial scaffolding included Typer CLI, SQLAlchemy, format-specific extractors (ebooklib, pypdf, ebookatty), and a basic library UI. An early FastAPI viewer was later removed in favor of CGI only.
+### Post-release (commits through `935492d`)
 
-**Pause:** User asked to hold off before installing dependencies.
+- **SHA-1 dedup:** `004_content_hash.sql`; scanner skips duplicate files
+- **Fetch metadata online:** CGI button; DB/cover updates only
+- **Dedicated `data/` directory** with `scripts/setup-data-dir.sh`
+- **Default books path:** `/media/books`
+- **`apache/exlibris.conf`** for `/exlibris/` mount
+- **Removed dead code:** FastAPI, `exlibris/extractors/`, broken `httpd.conf`
+- **Cron:** `scripts/scan-library.sh` for nightly scans; logs to `data/scan.log`
+- **CGI without pydantic:** `exlibris/cgi/common.py` avoids importing `exlibris.config` so Apache system Python works for the web UI
 
-### 2. SQLite schema
+---
 
-**Request:** Start with an appropriate SQLite schema.
+## Session 2 — Server deployment and UI polish (June 2026)
 
-Created `exlibris/schema/001_initial.sql`:
+This session continued after the initial release, deploying to a production server and iterating on the library UI for a large collection (~600K books planned).
 
-- `schema_version` — migration tracking
-- `books` — one row per file (path, format, size, mtime, hash, bibliographic fields, scan lifecycle)
-- `books_fts` — FTS5 virtual table with sync triggers for full-text search
-- Indexes on title, authors, format, ISBN, series, scan time, missing flag
+### Server deployment (Apache on Debian)
 
-SQLAlchemy models in `exlibris/models.py`; `database.py` applies migrations on init.
+**Install path:** `/media/books/ExLibris` (not under `$HOME`).
 
-### 3. Scanner with ebook-meta
+**Apache logs:** `/var/log/apache2/error.log` and `access.log`.
 
-**Request:** Python script to walk directories and populate the database using Calibre `ebook-meta`.
+**Problems encountered and fixes:**
 
-Added:
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `AH01630: client denied … /home/evaitl/programming` | `EXLIBRIS_ROOT` in copied `exlibris.conf` still pointed at dev machine path | Set `Define EXLIBRIS_ROOT /media/books/ExLibris` in `/etc/apache2/conf-available/exlibris.conf` |
+| `AH01630` under `/home/...` | `www-data` cannot traverse home directory | Move install to `/media/books/ExLibris` or `chmod o+x` on parent dirs |
+| `ScriptAlias … will probably never match` | Broad `Alias /exlibris/` listed before `ScriptAlias` | Put `ScriptAlias` **before** `Alias` in config |
+| `ModuleNotFoundError: No module named 'pydantic'` on fetch | `allowed_book_file()` imported `exlibris.config` | Removed pydantic from CGI code path (`common.py`, `fetch_metadata.py`) |
+| Database read-only for web server | `library.db` files owned by user, mode `644` | `sudo usermod -aG evaitl www-data`; `chmod g+rw data/library.db*` |
+| Fetch replaces cover with blank | Open Library returns 1×1 transparent GIF (~807 bytes) when no cover | See § Fetch metadata cover handling below |
 
-- `exlibris/ebook_meta.py` — parses OPF/XML output from `ebook-meta`
-- `scan_books.py` — CLI wrapper with verbose logging
-- Refactored `exlibris/scanner.py` to use ebook-meta instead of pure-Python extractors
-
-Extractors under `exlibris/extractors/` remain in the tree but the live scanner path uses ebook-meta only.
-
-### 4. License
-
-**Request:** Blue Oak Model License 1.0.0.
-
-Added `LICENSE.md` (moved from initial `LICENSE` filename per follow-up).
-
-### 5. CGI web UI
-
-**Request:** HTML/CSS with Python CGI backend.
-
-Built:
-
-- `web/cgi-bin/index.py` — library grid with filters and pagination
-- `web/cgi-bin/book.py` — book detail page
-- `web/cgi-bin/cover.py` — serve cover images
-- `web/static/style.css` — card grid, filters, detail layout
-- `exlibris/cgi/common.py` — DB queries, env-based config
-- `exlibris/cgi/render.py` — HTML generation
-
-**Environment variables:**
-
-| Variable | Purpose |
-|----------|---------|
-| `EXLIBRIS_DATABASE_PATH` | Path to `library.db` |
-| `EXLIBRIS_CGI_PREFIX` | URL prefix for CGI scripts (e.g. `/cgi-bin/`) |
-| `EXLIBRIS_STATIC_URL` | Stylesheet URL |
-
-Dev server example:
+**Permissions checklist:**
 
 ```bash
-cd web
-EXLIBRIS_CGI_PREFIX=/cgi-bin/ \
-EXLIBRIS_STATIC_URL=/static/style.css \
-EXLIBRIS_DATABASE_PATH=/path/to/library.db \
-python3 -m http.server --cgi 8080
+# Apache reads: /media/books, web/, exlibris/
+# Apache writes: data/ only
+sudo usermod -aG evaitl www-data
+chmod 2775 data/ data/covers
+chmod g+rw data/library.db data/library.db-wal data/library.db-shm
+sudo systemctl restart apache2   # pick up new group
 ```
 
-### 6. Default scan path and gitignore
+**Scanner vs web UI Python:**
 
-**Request:** Scan `books/` by default; gitignore the books directory.
+- **Web UI (CGI):** system Python 3.11+ — stdlib only
+- **Scanner (`exlibris scan`):** project venv with `pip install -e .`
+- **Cron:** `scripts/scan-library.sh` activates `.venv` automatically
 
-- Default scan path: `books/` in project root
-- `.gitignore`: `books/`, `covers/`, `library.db`, WAL/journal files, `scan.log`, `.venv/`
+### Book detail display
 
-### 7. First scan and browser preview
+- **Published date:** formatted for display (e.g. `15 June 2020`) without time component
+- **File name:** basename shown in metadata grid (not full path)
 
-Scanner was run against `books/` (~7,511 EPUBs). CGI dev server started on port 8080.
+### Search and filters
 
-### 8. Book covers
+Replaced publisher/genre dropdowns with text search (like title/author).
 
-**Request:** Display covers on the web page.
+**Word-based matching:** input split on spaces; every word must match as case-insensitive substring.
 
-- Migration `002_covers.sql` — `cover_path` column on `books`
-- Scanner extracts covers via `ebook-meta --cover` into `covers/{id}.jpg`
-- `cover.py` CGI endpoint serves cover images
+- Title: matches `title`, `sort_title`, or `file_name`
+- Author, publisher, genre: match respective columns
 
-### 9. Filters
+Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 
-**Request:** Filter by genre, title, author, publisher.
+### Pagination and scale (~600K books)
 
-- Migration `003_tags.sql` — `tags` column (from Calibre tags / OPF subjects)
-- Filter UI: title, author, publisher, genre (tags), language
-- **Title/author:** text inputs, case-insensitive substring match
-- **Publisher, genre, language:** `<select>` dropdowns populated from distinct DB values
-- Genre and publisher option labels truncated to 48 characters; CSS `max-width: 14rem` on selects to prevent layout overlap
+**Decision:** server-side pagination, not infinite scroll. Search/filter to narrow results; avoid loading entire library.
 
-### 10. Book detail improvements
+- Default page shows first page of all books (sorted by dropdown)
+- **Page size:** 10, 25, 50, 100 (default), 200 — configurable in UI
+- **Jump to page** control in pagination bar
+- Filtered `COUNT(*)` used for pagination totals
+- `LIMIT`/`OFFSET` in SQL queries
 
-**Request:** Remove file/path fields; add download button.
+**Not yet done (recommended for scale):**
 
-- Detail page shows bibliographic metadata only
-- `download.py` serves EPUB with `Content-Disposition: attachment`; path validated under `books/`
+- Wire `books_fts` into UI (FTS exists; UI still uses `LIKE`)
+- Keyset pagination for very deep offsets
 
-### 11. Description HTML
+### Random sort
 
-**Request:** Don't escape HTML in descriptions (e.g. Doctorow books with markup in OPF).
+**Random** sort option samples up to `page_size` books via `ORDER BY RANDOM()`. Each page request returns a new random batch; pagination counter is informational only.
 
-- Description rendered as raw HTML in detail view (`description__body`)
-- Trust model: metadata comes from user's own files
+### Sort direction
 
-### 12. Database reset and rescan
+↑/↓ arrows next to sort dropdown toggle ascending/descending. Defaults: title/author asc; published/size/scanned desc. Hidden for Random sort.
 
-**Request:** Clear database and rescan.
+### Keyboard shortcuts (`web/static/library.js`)
 
-Deleted `library.db` and restarted full scan of `books/`.
+| Key | Action |
+|-----|--------|
+| `/` | Focus title search |
+| `Esc` | Clear filters (closes help dialog first) |
+| `?` | Toggle shortcuts help |
+| `←` / `→` | Previous / next page |
+| Page Up / Page Down | Native browser scroll |
 
-### 13. Language filter
+### Debounced search
 
-**Request:** Add language filter to the web page.
+Text filter fields auto-submit **1 second** after typing stops. Language, sort, and per-page dropdowns submit on change. **Apply** still available for immediate submit.
 
-Added language `<select>` to the CGI library view.
+### Compact toolbar layout
 
-### 14. README
+- Header: brand + tagline on one line, reduced padding
+- Filters: single compact row (placeholders instead of labels)
+- Stats line inside filter box
 
-**Request:** Installation and run instructions in README.md.
+### Layout and theme
 
-Documented: requirements (Python 3.11+, Calibre), venv setup, scanning, CGI dev server, Apache deployment, CLI usage.
+- Container widened: `1680px` max, `0.5rem` side margins
+- Apply button: fixed `width: auto` (was squeezed by `width: 100%`)
+- **Accent color:** dark blue (`#1a365d` light / `#6ba3d6` dark) with cool gray-blue neutrals
 
-### 15. EPUB only
+### Fetch metadata cover handling
 
-**Request:** Scanner looks for `.epub` only; remove format filter/sort from web UI.
+When online fetch finds no real cover, **existing cover is preserved**.
 
-- `SUPPORTED_EXTENSIONS = {".epub"}` in `scanner.py`
-- Removed format filter and format sort option from library page
+Detection in `exlibris/fetch_metadata.py`:
 
-Stopped in-progress multi-format scan and restarted with EPUB-only scanner.
-
-### 16. Apache instructions
-
-**Request:** Document running under Apache.
-
-Added Apache/mod_cgi configuration section to README.md.
-
-### 17. Runtime artifacts in gitignore
-
-**Request:** Ignore runtime files.
-
-Added to `.gitignore`:
-
-```
-library.db-journal
-library.db-wal
-library.db-shm
-scan.log
-```
-
-### 18. Incremental scan (live updates)
-
-**Request:** Process one book at a time so the web UI updates during a long scan.
-
-Changes:
-
-- Scanner commits after each book (rollback on per-book errors)
-- SQLite WAL mode enabled in `database.py` for concurrent reads during writes
-- `-v` / `--verbose` prints `indexed: {title}` per book
-
-Killed batch-commit scan and restarted with incremental scanner.
-
-### 19. Sort by published date
-
-**Request:** Add published date to sort options.
-
-Sort order: `published_date IS NULL, published_date DESC` (newest first; undated books last).
-
-Added to the CGI library page.
-
-Available sort fields: title, author, date added, published date.
-
-### 20. Initial commit and push
-
-**Request:** Commit to main and push.
-
-Committed 36 source files; pushed to `origin/main` at https://github.com/evaitl/ExLibris.git. Runtime artifacts excluded via `.gitignore`.
-
-### 21. Post-release improvements (June 2026)
-
-- **SHA-1 dedup:** migration `004_content_hash.sql`; scanner skips duplicate files
-- **Fetch metadata online:** CGI button + `fetch_metadata.py`; DB/cover updates only (preserves dedup)
-- **Dedicated `data/` directory:** `library.db` and `covers/` moved out of repo root; `scripts/setup-data-dir.sh`
-- **Default books path:** `/media/books` instead of project `books/`
-- **Apache:** `apache/exlibris.conf` for path-based `/exlibris/` deployment
-- **Removed dead code:** FastAPI app/templates, `exlibris/extractors/`, unused `ebook_meta` write helpers
-- **Fetch UX:** loading state on fetch button; headless Calibre env for server use
+1. Open Library URLs use `?default=false` → 404 when no cover (instead of blank image)
+2. Downloaded images must be ≥ 100×100 pixels (rejects 1×1 transparent GIF placeholder)
+3. `_save_cover()` only runs when valid bytes returned; metadata fields still update
 
 ---
 
@@ -272,9 +218,7 @@ Key `books` columns: `file_path`, `content_hash`, `title`, `authors`, `publisher
 
 **Python (pyproject.toml):** typer, pydantic-settings, sqlalchemy, pyyaml
 
-**System:** Calibre (`ebook-meta` on PATH)
-
-Install:
+**System:** Calibre (`ebook-meta`, `fetch-ebook-metadata` on PATH)
 
 ```bash
 python3 -m venv .venv
@@ -286,37 +230,67 @@ On Debian/Ubuntu: `sudo apt install python3-venv python3-pip calibre`
 
 ---
 
-## CLI
+## CLI and cron
 
 ```bash
-exlibris scan                    # scan default /media/books
-exlibris scan --path ~/foo       # scan additional paths
-python scan_books.py -v          # standalone scanner, verbose
-./scripts/setup-data-dir.sh      # create data/ directory
+exlibris scan                         # scan default /media/books
+exlibris scan --path ~/foo              # additional paths
+python scan_books.py -v                 # standalone scanner, verbose
+./scripts/setup-data-dir.sh             # create data/ directory
+./scripts/scan-library.sh               # manual or cron scan
 ```
+
+Cron example (4 AM daily):
+
+```cron
+0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
+```
+
+---
+
+## Commit history (Session 2)
+
+| Commit | Summary |
+|--------|---------|
+| `9131d4d` | Published date formatting; file name on detail page |
+| `bcd6369` | Word-based text search for title/author/genre/publisher |
+| `3613f6f` | Pagination, Page Up/Down browse, random sort |
+| `b2c9bc0` | Default page shows books without requiring filters |
+| `2b47d66` | Sort direction, page size, debounced search, keyboard shortcuts |
+| `d91cec5` | Compact header and filter toolbar |
+| `9cfadda` | Arrow keys for page navigation; Page Up/Down scrolls |
+| `07d5e1f` | Search debounce increased to 1 second |
+| `8ce827c` | Wider layout; Apply button fix; dark blue theme |
+| `533f39c` | Reject placeholder covers on online metadata fetch |
 
 ---
 
 ## Known State
 
-- **UI:** CGI only (`web/cgi-bin/`); FastAPI viewer removed
-- **Books:** default scan path `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`; scanner skips files already in DB
-- **Fetch metadata:** updates SQLite + `data/covers/` only; button shows “Fetching…”
-- **Apache:** path-based mount at `/exlibris/` via `apache/exlibris.conf`
+- **UI:** CGI only; minimal JS in `library.js`
+- **Books:** default scan `/media/books`; runtime data in `data/`
+- **Dedup:** SHA-1 `content_hash`
+- **Library browse:** paginated, word-search filters, random sort, keyboard navigation
+- **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
+- **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
+- **Scale target:** ~600K books — pagination and LIKE search work; FTS recommended next
 
 ---
 
 ## Possible Follow-ups
 
-- Progress indicator or scan status API
-- Full-text search wired into the web UI (FTS table exists but UI uses LIKE filters)
-- Pagination on the library index page
-- Resumable or parallel scanning for very large libraries
-- Apache setup verification on target host
+- Full-text search (`books_fts`) in the web UI
+- Genre/language links from book detail back to filtered library
+- Scan status in header (`data/scan.log` or DB)
+- Faceted filter counts (e.g. language with book counts)
+- Keyset pagination for deep pages
+- Progress indicator during long scans
+- Detect additional cover placeholder sources (Google Books edge cases)
 
 ---
 
 ## Conversation Reference
 
-Full agent transcript: Cursor chat session that produced this project (June 2026).
+Cursor agent session, June 2026 — initial build (Session 1) and server deployment / UI iteration (Session 2).
+
+Transcript: `44633832-6442-49a7-aa75-ffee74ac2a80`
