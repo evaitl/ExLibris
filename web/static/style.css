@@ -105,11 +105,6 @@ body {
   min-width: 0;
 }
 
-.filter-field--genre,
-.filter-field--publisher {
-  max-width: 14rem;
-}
-
 .filter-field__label {
   font-size: 0.78rem;
   text-transform: uppercase;

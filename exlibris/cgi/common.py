@@ -244,39 +244,10 @@ SORT_OPTIONS = {
 
 @dataclass(frozen=True)
 class FilterOptions:
-    publishers: list[str]
-    genres: list[str]
     languages: list[str]
 
 
 def load_filter_options(conn: sqlite3.Connection) -> FilterOptions:
-    publishers = [
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT DISTINCT publisher FROM books
-            WHERE is_missing = 0
-              AND publisher IS NOT NULL
-              AND TRIM(publisher) != ''
-            ORDER BY publisher COLLATE NOCASE
-            """
-        ).fetchall()
-    ]
-
-    genres: set[str] = set()
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(books)").fetchall()}
-    if "tags" in columns:
-        for (raw,) in conn.execute(
-            """
-            SELECT tags FROM books
-            WHERE is_missing = 0 AND tags IS NOT NULL AND TRIM(tags) != ''
-            """
-        ):
-            for part in re.split(r"[,;]", raw):
-                genre = part.strip()
-                if genre:
-                    genres.add(genre)
-
     languages = [
         row[0]
         for row in conn.execute(
@@ -290,11 +261,30 @@ def load_filter_options(conn: sqlite3.Connection) -> FilterOptions:
         ).fetchall()
     ]
 
-    return FilterOptions(
-        publishers=publishers,
-        genres=sorted(genres, key=str.casefold),
-        languages=languages,
-    )
+    return FilterOptions(languages=languages)
+
+
+def _search_words(text: str) -> list[str]:
+    return [word for word in text.split() if word]
+
+
+def _append_word_match(
+    where: list[str],
+    params: list[object],
+    *,
+    words: list[str],
+    columns: list[str],
+) -> None:
+    """Require every word to match at least one column (case-insensitive substring)."""
+    for word in words:
+        pattern = f"%{word}%"
+        if len(columns) == 1:
+            where.append(f"{columns[0]} LIKE ? COLLATE NOCASE")
+            params.append(pattern)
+        else:
+            or_clauses = " OR ".join(f"{col} LIKE ? COLLATE NOCASE" for col in columns)
+            where.append(f"({or_clauses})")
+            params.extend([pattern] * len(columns))
 
 
 def list_books(
@@ -312,29 +302,36 @@ def list_books(
     where: list[str] = ["is_missing = 0"]
 
     if title.strip():
-        pattern = f"%{title.strip()}%"
-        where.append(
-            """
-            (
-                title LIKE ? COLLATE NOCASE
-                OR sort_title LIKE ? COLLATE NOCASE
-                OR file_name LIKE ? COLLATE NOCASE
-            )
-            """
+        _append_word_match(
+            where,
+            params,
+            words=_search_words(title),
+            columns=["title", "sort_title", "file_name"],
         )
-        params.extend([pattern, pattern, pattern])
 
     if author.strip():
-        where.append("authors LIKE ? COLLATE NOCASE")
-        params.append(f"%{author.strip()}%")
+        _append_word_match(
+            where,
+            params,
+            words=_search_words(author),
+            columns=["authors"],
+        )
 
-    if publisher:
-        where.append("publisher = ?")
-        params.append(publisher)
+    if publisher.strip():
+        _append_word_match(
+            where,
+            params,
+            words=_search_words(publisher),
+            columns=["publisher"],
+        )
 
-    if genre:
-        where.append("tags LIKE ?")
-        params.append(f"%{genre}%")
+    if genre.strip():
+        _append_word_match(
+            where,
+            params,
+            words=_search_words(genre),
+            columns=["tags"],
+        )
 
     if language:
         where.append("language = ?")

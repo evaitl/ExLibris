@@ -108,17 +108,13 @@ def render_library(
             <span class="filter-field__label">Author</span>
             <input type="search" name="author" value="{esc(selected_author)}" placeholder="Search authors…" aria-label="Filter by author">
           </label>
-          <label class="filter-field filter-field--publisher">
+          <label class="filter-field">
             <span class="filter-field__label">Publisher</span>
-            <select name="publisher" aria-label="Filter by publisher">
-{_select_options(options.publishers, selected_publisher, "All publishers", max_label=48)}
-            </select>
+            <input type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Search publishers…" aria-label="Filter by publisher">
           </label>
-          <label class="filter-field filter-field--genre">
+          <label class="filter-field">
             <span class="filter-field__label">Genre</span>
-            <select name="genre" aria-label="Filter by genre">
-{_select_options(options.genres, selected_genre, "All genres", max_label=48)}
-            </select>
+            <input type="search" name="genre" value="{esc(selected_genre)}" placeholder="Search genres…" aria-label="Filter by genre">
           </label>
           <label class="filter-field">
             <span class="filter-field__label">Language</span>
