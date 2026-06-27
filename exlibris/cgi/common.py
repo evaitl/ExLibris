@@ -120,6 +120,19 @@ def fetch_metadata_action() -> str:
     return cgi_script("fetch_metadata.py")
 
 
+def restore_cover_action() -> str:
+    return cgi_script("restore_cover.py")
+
+
+def cover_cache_version(book: BookRow) -> str:
+    """Cache-bust token for cover URLs; uses file mtime when the cover exists on disk."""
+    if book.cover_path:
+        path = project_root() / book.cover_path
+        if path.is_file():
+            return str(int(path.stat().st_mtime))
+    return book.last_scanned_at.replace(":", "").replace("-", "").replace("+", "")
+
+
 def allowed_book_file(file_path: str) -> Path | None:
     """Return resolved ebook path only if it lives under a configured books directory."""
     path = Path(file_path).expanduser().resolve()

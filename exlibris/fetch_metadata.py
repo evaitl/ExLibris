@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from exlibris.ebook_meta import EbookMeta, EbookMetaError, parse_opf
+from exlibris.ebook_meta import EbookMeta, EbookMetaError, extract_cover, parse_opf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
@@ -20,6 +23,15 @@ MIN_COVER_BYTES = 500
 MIN_COVER_WIDTH = 100
 MIN_COVER_HEIGHT = 100
 GOOGLE_COVER_ZOOM = 3
+# Stable hashes for provider "no cover" images (full-size, not 1×1).
+KNOWN_PLACEHOLDER_COVER_SHA256: frozenset[str] = frozenset(
+    {
+        # Google Books "image not available" (PNG disguised as JPEG URL, 575×750).
+        "3efa8c43e5b4348f303a528c81adf435f0111ea752fe9f0f6241478b60987fa6",
+        # Open Library missing-cover placeholder (JPEG, 192×262).
+        "45ec8d2f9e3633f642da1f50946307e52bea6f1c8c697828074a3601f0312560",
+    }
+)
 FETCH_PLUGINS = ("Google", "Open Library")
 CALIBRE_FETCH_TIMEOUT = 30
 SUBPROCESS_TIMEOUT = 45
@@ -118,6 +130,115 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     return None
 
 
+def _cover_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _paeth_predictor(a: int, b: int, c: int) -> int:
+    p = a + b - c
+    pa = abs(p - a)
+    pb = abs(p - b)
+    pc = abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    if pb <= pc:
+        return b
+    return c
+
+
+def _png_luminance_stats(data: bytes) -> tuple[float, float, float] | None:
+    """Return mean luminance and bright/dark pixel ratios for an 8-bit PNG."""
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    pos = 8
+    width = height = bit_depth = color_type = None
+    idat = bytearray()
+    while pos < len(data):
+        chunk_len = int.from_bytes(data[pos : pos + 4], "big")
+        chunk_type = data[pos + 4 : pos + 8]
+        chunk = data[pos + 8 : pos + 8 + chunk_len]
+        pos += 12 + chunk_len
+        if chunk_type == b"IHDR" and chunk_len >= 13:
+            width, height, bit_depth, color_type, _, _, _ = struct.unpack(
+                ">IIBBBBB", chunk[:13]
+            )
+        elif chunk_type == b"IDAT":
+            idat.extend(chunk)
+        elif chunk_type == b"IEND":
+            break
+    if width is None or height is None or not idat:
+        return None
+    if bit_depth != 8 or color_type not in (0, 2, 3, 6):
+        return None
+
+    bytes_per_pixel = {0: 1, 2: 3, 3: 1, 6: 4}[color_type]
+    row_bytes = width * bytes_per_pixel
+    try:
+        raw = zlib.decompress(bytes(idat))
+    except zlib.error:
+        return None
+
+    pixels: list[int] = []
+    index = 0
+    previous_row = bytearray(row_bytes)
+    for _row in range(height):
+        if index >= len(raw):
+            return None
+        filter_type = raw[index]
+        index += 1
+        filtered = bytearray(raw[index : index + row_bytes])
+        index += row_bytes
+        if len(filtered) < row_bytes:
+            return None
+        recon = bytearray(row_bytes)
+        for i in range(row_bytes):
+            left = recon[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+            up = previous_row[i]
+            up_left = previous_row[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+            value = filtered[i]
+            if filter_type == 1:
+                value = (value + left) & 0xFF
+            elif filter_type == 2:
+                value = (value + up) & 0xFF
+            elif filter_type == 3:
+                value = (value + ((left + up) // 2)) & 0xFF
+            elif filter_type == 4:
+                value = (value + _paeth_predictor(left, up, up_left)) & 0xFF
+            recon[i] = value
+        previous_row = recon
+        if color_type == 0:
+            pixels.extend(recon)
+        elif color_type == 2:
+            for i in range(0, row_bytes, 3):
+                red, green, blue = recon[i : i + 3]
+                pixels.append((red + green + blue) // 3)
+        elif color_type == 6:
+            for i in range(0, row_bytes, 4):
+                red, green, blue, _alpha = recon[i : i + 4]
+                pixels.append((red + green + blue) // 3)
+        else:
+            return None
+
+    if not pixels:
+        return None
+    bright = sum(1 for value in pixels if value >= 235)
+    dark = sum(1 for value in pixels if value < 80)
+    mean = sum(pixels) / len(pixels)
+    return mean, bright / len(pixels), dark / len(pixels)
+
+
+def _is_placeholder_cover(data: bytes) -> bool:
+    """Detect provider placeholder art (e.g. Google 'image not available')."""
+    if _cover_sha256(data) in KNOWN_PLACEHOLDER_COVER_SHA256:
+        return True
+    stats = _png_luminance_stats(data)
+    if stats is None:
+        return False
+    mean, very_bright_ratio, dark_ratio = stats
+    # Near-white PNG with almost no dark pixels (Google Books missing-cover art).
+    return very_bright_ratio >= 0.88 and mean >= 248.0 and dark_ratio <= 0.01
+
+
 def _image_dimensions(data: bytes) -> tuple[int, int] | None:
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
         width = int.from_bytes(data[16:20], "big")
@@ -133,8 +254,10 @@ def _image_dimensions(data: bytes) -> tuple[int, int] | None:
 
 
 def _is_usable_cover(data: bytes) -> bool:
-    """Reject Open Library / Google placeholder images (often 1x1 transparent GIF)."""
+    """Reject tiny images and provider placeholder covers."""
     if len(data) < MIN_COVER_BYTES:
+        return False
+    if _is_placeholder_cover(data):
         return False
     dimensions = _image_dimensions(data)
     if dimensions is None:
@@ -286,6 +409,25 @@ def _save_cover(
             f"The web server needs write permission on {covers_root}."
         ) from exc
     return str(dest.relative_to(PROJECT_ROOT))
+
+
+def restore_embedded_cover(
+    *,
+    ebook_path: Path,
+    book_id: int,
+    covers_dir: Path | None = None,
+    ebook_meta_cmd: str | None = None,
+) -> str:
+    """Re-extract the cover embedded in the ebook file."""
+    covers_root = _resolve_covers_dir(covers_dir)
+    cover_file = extract_cover(
+        ebook_path,
+        covers_root / str(book_id),
+        ebook_meta_cmd=ebook_meta_cmd,
+    )
+    if cover_file is None:
+        raise FetchMetadataError("No embedded cover found in this ebook.")
+    return str(cover_file.relative_to(PROJECT_ROOT))
 
 
 def enrich_book_from_online(

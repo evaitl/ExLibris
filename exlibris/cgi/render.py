@@ -9,10 +9,12 @@ from exlibris.cgi.common import (
     BookRow,
     FilterOptions,
     cgi_script,
+    cover_cache_version,
     cover_href,
     download_href,
     esc,
     fetch_metadata_action,
+    restore_cover_action,
     format_published_date,
     format_size,
     has_search_filters,
@@ -50,7 +52,7 @@ def page_shell(title: str, body: str) -> str:
 def _cover_img(book: BookRow, *, css_class: str = "book-cover") -> str:
     title = book.title or book.file_name
     if book.cover_path:
-        version = book.last_scanned_at.replace(":", "").replace("-", "")
+        version = cover_cache_version(book)
         return (
             f'<img class="{css_class}" src="{esc(cover_href(book.id, version=version))}" '
             f'alt="Cover: {esc(title)}" loading="lazy">'
@@ -505,6 +507,14 @@ def render_book_detail(
         flash = f"""      <p class="flash flash--error">{esc(error)}</p>
 """
 
+    restore_cover_form = ""
+    if not book.is_missing:
+        restore_cover_form = f"""              <form class="book-actions__form book-actions__form--restore" method="post" action="{esc(restore_cover_action())}" onsubmit="return confirm('Restore the cover embedded in this ebook? The current cover image will be replaced.');">
+                <input type="hidden" name="id" value="{book.id}">
+                <button type="submit" class="button button--restore">Restore cover from file</button>
+              </form>
+"""
+
     body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
 {flash}
     <article class="book-detail">
@@ -520,6 +530,7 @@ def render_book_detail(
                 <input type="hidden" name="id" value="{book.id}">
                 <button type="submit" class="button button--fetch">Fetch metadata online</button>
               </form>
+              {restore_cover_form}
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
             </p>
           </header>

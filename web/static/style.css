@@ -624,6 +624,16 @@ body {
   cursor: wait;
 }
 
+.button--restore {
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.button--restore:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
 .subtitle {
   color: var(--muted);
   margin-top: 0.35rem;
