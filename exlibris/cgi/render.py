@@ -36,7 +36,7 @@ def page_shell(title: str, body: str) -> str:
   <header class="site-header">
     <div class="container header-inner">
       <a class="brand" href="{esc(cgi_script('index.py'))}">ExLibris</a>
-      <p class="tagline">Your personal ebook library</p>
+      <span class="tagline">Your personal ebook library</span>
     </div>
   </header>
   <main class="container">
@@ -386,61 +386,38 @@ def render_library(
 
     clear_url = esc(cgi_script("index.py"))
     body = f"""    <section class="toolbar">
-      <form id="library-filter-form" class="filter-form" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
+      <form id="library-filter-form" class="filter-form filter-form--compact" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
         <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">
-        <div class="filter-form__row">
-          <label class="filter-field">
-            <span class="filter-field__label">Title</span>
-            <input type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Search titles…" aria-label="Filter by title" autocomplete="off" data-filter-search>
-          </label>
-          <label class="filter-field">
-            <span class="filter-field__label">Author</span>
-            <input type="search" name="author" value="{esc(selected_author)}" placeholder="Search authors…" aria-label="Filter by author" autocomplete="off" data-filter-search>
-          </label>
-          <label class="filter-field">
-            <span class="filter-field__label">Publisher</span>
-            <input type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Search publishers…" aria-label="Filter by publisher" autocomplete="off" data-filter-search>
-          </label>
-          <label class="filter-field">
-            <span class="filter-field__label">Genre</span>
-            <input type="search" name="genre" value="{esc(selected_genre)}" placeholder="Search genres…" aria-label="Filter by genre" autocomplete="off" data-filter-search>
-          </label>
-          <label class="filter-field">
-            <span class="filter-field__label">Language</span>
-            <select name="language" aria-label="Filter by language" data-filter-auto>
-{_select_options(options.languages, selected_language, "All languages")}
-            </select>
-          </label>
-        </div>
-        <div class="filter-form__row filter-form__row--actions">
-          <label class="filter-field filter-field--sort">
-            <span class="filter-field__label">Sort</span>
-            <div class="sort-controls">
-              <select name="sort" aria-label="Sort by" data-filter-auto>
+        <div class="filter-form__main">
+          <input class="filter-input" type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Title" aria-label="Filter by title" autocomplete="off" data-filter-search>
+          <input class="filter-input" type="search" name="author" value="{esc(selected_author)}" placeholder="Author" aria-label="Filter by author" autocomplete="off" data-filter-search>
+          <input class="filter-input" type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Publisher" aria-label="Filter by publisher" autocomplete="off" data-filter-search>
+          <input class="filter-input" type="search" name="genre" value="{esc(selected_genre)}" placeholder="Genre" aria-label="Filter by genre" autocomplete="off" data-filter-search>
+          <select class="filter-input" name="language" aria-label="Filter by language" data-filter-auto>
+{_select_options(options.languages, selected_language, "Language")}
+          </select>
+          <div class="sort-controls">
+            <select class="filter-input" name="sort" aria-label="Sort by" data-filter-auto>
               <option value="title"{sort_selected["title"]}>Title</option>
               <option value="author"{sort_selected["author"]}>Author</option>
-              <option value="published"{sort_selected["published"]}>Published date</option>
+              <option value="published"{sort_selected["published"]}>Published</option>
               <option value="size"{sort_selected["size"]}>Size</option>
-              <option value="scanned"{sort_selected["scanned"]}>Last scanned</option>
+              <option value="scanned"{sort_selected["scanned"]}>Scanned</option>
               <option value="random"{sort_selected["random"]}>Random</option>
             </select>
 {_sort_dir_controls(sort, sort_dir)}
-            </div>
-          </label>
-          <label class="filter-field filter-field--page-size">
-            <span class="filter-field__label">Per page</span>
-            <select name="page_size" aria-label="Books per page" data-filter-auto>
+          </div>
+          <select class="filter-input filter-input--narrow" name="page_size" aria-label="Books per page" data-filter-auto>
 {_page_size_options(page_size)}
-            </select>
-          </label>
+          </select>
           <div class="filter-form__buttons">
-            <button type="submit">Apply filters</button>
+            <button type="submit">Apply</button>
             <a class="filter-clear" href="{clear_url}">Clear</a>
             <button type="button" class="filter-help" data-keyboard-help-open title="Keyboard shortcuts (?)">?</button>
           </div>
         </div>
+        <p class="stats">{stats} · <kbd>?</kbd> shortcuts</p>
       </form>
-      <p class="stats">{stats} · Press <kbd>?</kbd> for shortcuts</p>
     </section>
 
 {collection}
