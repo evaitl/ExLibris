@@ -1,0 +1,10 @@
+# Directories to scan recursively for ebooks (epub, mobi, azw3, pdf)
+scan_paths:
+  - books
+
+# SQLite database file created/updated by the scanner
+database_path: library.db
+
+# Web server defaults for `exlibris serve`
+host: 127.0.0.1
+port: 8080

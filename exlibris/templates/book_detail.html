@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p class="back-link"><a href="/">← Back to library</a></p>
+
+<article class="book-detail">
+  <header>
+    <h1>{{ book.title or book.file_name }}</h1>
+    {% if book.authors %}
+    <p class="subtitle">by {{ book.authors }}</p>
+    {% endif %}
+  </header>
+
+  <dl class="meta-grid">
+    <div><dt>Format</dt><dd><span class="badge">{{ book.format | upper }}</span></dd></div>
+    <div><dt>File</dt><dd>{{ book.file_name }}</dd></div>
+    <div><dt>Path</dt><dd class="path">{{ book.file_path }}</dd></div>
+    <div><dt>Size</dt><dd>{{ (book.file_size / 1024 / 1024) | round(2) }} MB</dd></div>
+    {% if book.publisher %}<div><dt>Publisher</dt><dd>{{ book.publisher }}</dd></div>{% endif %}
+    {% if book.published_date %}<div><dt>Published</dt><dd>{{ book.published_date }}</dd></div>{% endif %}
+    {% if book.isbn %}<div><dt>ISBN</dt><dd>{{ book.isbn }}</dd></div>{% endif %}
+    {% if book.language %}<div><dt>Language</dt><dd>{{ book.language }}</dd></div>{% endif %}
+    <div><dt>Last scanned</dt><dd>{{ book.last_scanned_at.strftime("%Y-%m-%d %H:%M UTC") if book.last_scanned_at else "—" }}</dd></div>
+  </dl>
+
+  {% if book.description %}
+  <section class="description">
+    <h2>Description</h2>
+    <div class="description__body">{{ book.description | safe }}</div>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}

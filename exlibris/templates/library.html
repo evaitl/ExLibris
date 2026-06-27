@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="toolbar">
+  <form class="search-form" method="get" action="/">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search title, author, filename, ISBN…" autofocus>
+    <select name="sort">
+      <option value="title" {% if sort == "title" %}selected{% endif %}>Sort: Title</option>
+      <option value="author" {% if sort == "author" %}selected{% endif %}>Sort: Author</option>
+      <option value="published" {% if sort == "published" %}selected{% endif %}>Sort: Published date</option>
+      <option value="size" {% if sort == "size" %}selected{% endif %}>Sort: Size</option>
+      <option value="scanned" {% if sort == "scanned" %}selected{% endif %}>Sort: Last scanned</option>
+    </select>
+    <button type="submit">Apply</button>
+  </form>
+  <p class="stats">{{ books | length }} shown · {{ total }} total in library</p>
+</section>
+
+{% if books %}
+<table class="library-table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Author</th>
+      <th>Format</th>
+      <th>Size</th>
+      <th>Path</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for book in books %}
+    <tr>
+      <td><a href="/book/{{ book.id }}">{{ book.title or book.file_name }}</a></td>
+      <td>{{ book.authors or "—" }}</td>
+      <td><span class="badge">{{ book.format | upper }}</span></td>
+      <td>{{ (book.file_size / 1024 / 1024) | round(2) }} MB</td>
+      <td class="path" title="{{ book.file_path }}">{{ book.file_path }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+  <h2>No books found</h2>
+  <p>Run <code>exlibris scan</code> to index your ebook directories, then refresh this page.</p>
+</div>
+{% endif %}
+{% endblock %}

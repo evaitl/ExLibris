@@ -1,0 +1,14 @@
+library.db
+library.db-journal
+library.db-wal
+library.db-shm
+scan.log
+books/
+covers/
+.env
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/

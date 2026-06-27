@@ -1,0 +1,213 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f1e8;
+  --surface: #fffdf8;
+  --text: #1f1a14;
+  --muted: #6b6258;
+  --accent: #8b4513;
+  --border: #ddd3c4;
+  --badge-bg: #efe4d4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171411;
+    --surface: #211c18;
+    --text: #f3ece2;
+    --muted: #b7aa9a;
+    --accent: #d4a574;
+    --border: #3a322b;
+    --badge-bg: #3a2f24;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  background: linear-gradient(180deg, var(--bg), color-mix(in srgb, var(--bg), black 8%));
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.container {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface), transparent 10%);
+  margin-bottom: 2rem;
+}
+
+.header-inner {
+  padding: 1.5rem 0;
+}
+
+.brand {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.tagline {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+.toolbar {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.search-form {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 0.5rem;
+}
+
+.search-form input,
+.search-form select,
+.search-form button {
+  font: inherit;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.search-form button {
+  background: var(--accent);
+  color: var(--surface);
+  border-color: var(--accent);
+  cursor: pointer;
+}
+
+.stats {
+  margin: 0;
+  color: var(--muted);
+}
+
+.library-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.library-table th,
+.library-table td {
+  padding: 0.85rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.library-table th {
+  background: color-mix(in srgb, var(--surface), var(--border) 35%);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.library-table tr:last-child td {
+  border-bottom: none;
+}
+
+.library-table a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.library-table a:hover {
+  text-decoration: underline;
+}
+
+.path {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--badge-bg);
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.empty-state {
+  padding: 3rem 1rem;
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 0.75rem;
+}
+
+.back-link {
+  margin-bottom: 1rem;
+}
+
+.book-detail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+}
+
+.book-detail h1 {
+  margin-top: 0;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin-top: -0.5rem;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.meta-grid dt {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.meta-grid dd {
+  margin: 0.25rem 0 0;
+}
+
+.description {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+@media (max-width: 800px) {
+  .search-form {
+    grid-template-columns: 1fr;
+  }
+
+  .path {
+    max-width: 12rem;
+  }
+}

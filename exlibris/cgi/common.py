@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import html
+import os
+import re
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class BookRow:
+    id: int
+    file_path: str
+    file_name: str
+    format: str
+    file_size: int
+    file_mtime: float
+    content_hash: str | None
+    title: str | None
+    sort_title: str | None
+    authors: str | None
+    publisher: str | None
+    published_date: str | None
+    isbn: str | None
+    language: str | None
+    description: str | None
+    series: str | None
+    series_index: float | None
+    page_count: int | None
+    cover_path: str | None
+    tags: str | None
+    first_seen_at: str
+    last_scanned_at: str
+    is_missing: int
+
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def database_path() -> Path:
+    env = os.environ.get("EXLIBRIS_DATABASE_PATH")
+    if env:
+        return Path(env).expanduser()
+    config = project_root() / "config.yaml"
+    if config.exists():
+        import yaml
+
+        data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+        if isinstance(data, dict) and data.get("database_path"):
+            path = Path(data["database_path"])
+            return path if path.is_absolute() else project_root() / path
+    return project_root() / "library.db"
+
+
+def static_href() -> str:
+    return os.environ.get("EXLIBRIS_STATIC_URL", "../static/style.css")
+
+
+def cgi_script(name: str) -> str:
+    prefix = os.environ.get("EXLIBRIS_CGI_PREFIX", "")
+    return f"{prefix}{name}"
+
+
+def cover_href(book_id: int) -> str:
+    return f"{cgi_script('cover.py')}?id={book_id}"
+
+
+def download_href(book_id: int) -> str:
+    return f"{cgi_script('download.py')}?id={book_id}"
+
+
+def allowed_book_file(file_path: str) -> Path | None:
+    """Return resolved ebook path only if it lives under the library books directory."""
+    path = Path(file_path).expanduser().resolve()
+    if not path.is_file():
+        return None
+    books_dir = (project_root() / "books").resolve()
+    try:
+        path.relative_to(books_dir)
+    except ValueError:
+        return None
+    return path
+
+
+def connect() -> sqlite3.Connection:
+    db = database_path()
+    if not db.exists():
+        raise FileNotFoundError(f"Library database not found: {db}")
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def esc(value: object | None) -> str:
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
+
+
+def format_size(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / 1024 / 1024:.2f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
+
+
+def row_to_book(row: sqlite3.Row) -> BookRow:
+    return BookRow(
+        id=row["id"],
+        file_path=row["file_path"],
+        file_name=row["file_name"],
+        format=row["format"],
+        file_size=row["file_size"],
+        file_mtime=row["file_mtime"],
+        content_hash=row["content_hash"],
+        title=row["title"],
+        sort_title=row["sort_title"],
+        authors=row["authors"],
+        publisher=row["publisher"],
+        published_date=row["published_date"],
+        isbn=row["isbn"],
+        language=row["language"],
+        description=row["description"],
+        series=row["series"],
+        series_index=row["series_index"],
+        page_count=row["page_count"],
+        cover_path=row["cover_path"] if "cover_path" in row.keys() else None,
+        tags=row["tags"] if "tags" in row.keys() else None,
+        first_seen_at=row["first_seen_at"],
+        last_scanned_at=row["last_scanned_at"],
+        is_missing=row["is_missing"],
+    )
+
+
+SORT_OPTIONS = {
+    "title": "COALESCE(NULLIF(sort_title, ''), NULLIF(title, ''), file_name) COLLATE NOCASE",
+    "author": "authors COLLATE NOCASE",
+    "published": "published_date IS NULL, published_date DESC",
+    "size": "file_size DESC",
+    "scanned": "last_scanned_at DESC",
+}
+
+
+@dataclass(frozen=True)
+class FilterOptions:
+    publishers: list[str]
+    genres: list[str]
+    languages: list[str]
+
+
+def load_filter_options(conn: sqlite3.Connection) -> FilterOptions:
+    publishers = [
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT DISTINCT publisher FROM books
+            WHERE is_missing = 0
+              AND publisher IS NOT NULL
+              AND TRIM(publisher) != ''
+            ORDER BY publisher COLLATE NOCASE
+            """
+        ).fetchall()
+    ]
+
+    genres: set[str] = set()
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(books)").fetchall()}
+    if "tags" in columns:
+        for (raw,) in conn.execute(
+            """
+            SELECT tags FROM books
+            WHERE is_missing = 0 AND tags IS NOT NULL AND TRIM(tags) != ''
+            """
+        ):
+            for part in re.split(r"[,;]", raw):
+                genre = part.strip()
+                if genre:
+                    genres.add(genre)
+
+    languages = [
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT DISTINCT language FROM books
+            WHERE is_missing = 0
+              AND language IS NOT NULL
+              AND TRIM(language) != ''
+            ORDER BY language COLLATE NOCASE
+            """
+        ).fetchall()
+    ]
+
+    return FilterOptions(
+        publishers=publishers,
+        genres=sorted(genres, key=str.casefold),
+        languages=languages,
+    )
+
+
+def list_books(
+    conn: sqlite3.Connection,
+    *,
+    title: str = "",
+    author: str = "",
+    publisher: str = "",
+    genre: str = "",
+    language: str = "",
+    sort: str = "title",
+) -> tuple[list[BookRow], int, FilterOptions]:
+    order_by = SORT_OPTIONS.get(sort, SORT_OPTIONS["title"])
+    params: list[object] = []
+    where: list[str] = ["is_missing = 0"]
+
+    if title.strip():
+        pattern = f"%{title.strip()}%"
+        where.append(
+            """
+            (
+                title LIKE ? COLLATE NOCASE
+                OR sort_title LIKE ? COLLATE NOCASE
+                OR file_name LIKE ? COLLATE NOCASE
+            )
+            """
+        )
+        params.extend([pattern, pattern, pattern])
+
+    if author.strip():
+        where.append("authors LIKE ? COLLATE NOCASE")
+        params.append(f"%{author.strip()}%")
+
+    if publisher:
+        where.append("publisher = ?")
+        params.append(publisher)
+
+    if genre:
+        where.append("tags LIKE ?")
+        params.append(f"%{genre}%")
+
+    if language:
+        where.append("language = ?")
+        params.append(language)
+
+    sql = f"""
+        SELECT *
+        FROM books
+        WHERE {" AND ".join(where)}
+        ORDER BY {order_by}, id
+    """
+    rows = conn.execute(sql, params).fetchall()
+
+    total = conn.execute(
+        "SELECT COUNT(*) FROM books WHERE is_missing = 0"
+    ).fetchone()[0]
+    options = load_filter_options(conn)
+    return [row_to_book(row) for row in rows], int(total), options
+
+
+def get_book(conn: sqlite3.Connection, book_id: int) -> BookRow | None:
+    row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+    return row_to_book(row) if row else None
