@@ -456,7 +456,7 @@ def render_library(
           <input class="filter-input" type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Publisher" aria-label="Filter by publisher" autocomplete="off" data-filter-search>
           <input class="filter-input" type="search" name="genre" value="{esc(selected_genre)}" placeholder="Genre" aria-label="Filter by genre" autocomplete="off" data-filter-search>
           <select class="filter-input" name="language" aria-label="Filter by language" data-filter-auto>
-{_select_options(options.languages, selected_language, "Language")}
+{_select_options(options.languages, selected_language, "Language", max_label=10)}
           </select>
 {favorites_filter}          <div class="sort-controls">
             <select class="filter-input" name="sort" aria-label="Sort by" data-filter-auto>
