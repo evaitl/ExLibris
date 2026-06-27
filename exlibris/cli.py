@@ -4,7 +4,7 @@ import typer
 
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
 from exlibris.database import get_engine, init_db
-from exlibris.scanner import scan_paths
+from exlibris.scanner import print_scan_progress, scan_paths
 from exlibris.users import UserError, register_user
 
 app = typer.Typer(
@@ -28,6 +28,7 @@ def scan(
         None, "--ebook-meta", help="Path to Calibre's ebook-meta executable"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-file progress"),
 ) -> None:
     """Scan directories for ebooks and update the library database."""
     settings = load_settings(config)
@@ -46,12 +47,17 @@ def scan(
             ebook_meta_cmd=ebook_meta,
             covers_dir=resolve_covers_dir(settings.covers_dir),
             verbose=verbose,
+            on_progress=None if quiet else print_scan_progress,
         )
 
-    typer.echo(
-        f"Scanned {stats.scanned} files, updated {stats.added_or_updated} records, "
-        f"skipped {stats.skipped} duplicates."
+    summary = (
+        f"Scanned {stats.scanned} files, updated {stats.added_or_updated} records"
     )
+    if stats.skipped:
+        summary += f", skipped {stats.skipped} duplicates"
+    if stats.unchanged:
+        summary += f", skipped {stats.unchanged} unchanged"
+    typer.echo(f"{summary}.")
     if stats.errors:
         typer.echo(f"{len(stats.errors)} issue(s):")
         for err in stats.errors:

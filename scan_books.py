@@ -10,7 +10,7 @@ from pathlib import Path
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
 from exlibris.database import get_engine, init_db
 from exlibris.ebook_meta import EbookMetaError, find_ebook_meta
-from exlibris.scanner import scan_paths
+from exlibris.scanner import print_scan_progress, scan_paths
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -52,7 +52,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print non-fatal metadata extraction warnings",
     )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Suppress per-file progress lines",
+    )
     return parser.parse_args(argv)
+
+
+def _format_summary(stats) -> str:
+    parts = [
+        f"Scanned {stats.scanned} file(s)",
+        f"added or updated {stats.added_or_updated} record(s)",
+    ]
+    if stats.skipped:
+        parts.append(f"skipped {stats.skipped} duplicate(s)")
+    if stats.unchanged:
+        parts.append(f"skipped {stats.unchanged} unchanged")
+    return "; ".join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     engine = get_engine(db_path)
     SessionLocal = init_db(engine)
 
+    progress = None if args.quiet else print_scan_progress
+
     with SessionLocal() as session:
         stats = scan_paths(
             session,
@@ -83,13 +103,10 @@ def main(argv: list[str] | None = None) -> int:
             ebook_meta_cmd=ebook_meta_cmd,
             covers_dir=resolve_covers_dir(settings.covers_dir),
             verbose=args.verbose,
+            on_progress=progress,
         )
 
-    print(
-        f"Scanned {stats.scanned} file(s); "
-        f"added or updated {stats.added_or_updated} record(s); "
-        f"skipped {stats.skipped} duplicate(s) in {db_path}."
-    )
+    print(f"{_format_summary(stats)} in {db_path}.")
     if stats.errors:
         print(f"{len(stats.errors)} issue(s):", file=sys.stderr)
         for err in stats.errors:
