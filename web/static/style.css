@@ -1,13 +1,13 @@
 :root {
   color-scheme: light dark;
-  --bg: #f6f1e8;
-  --surface: #fffdf8;
-  --text: #1f1a14;
-  --muted: #6b6258;
-  --accent: #8b4513;
-  --border: #ddd3c4;
-  --badge-bg: #efe4d4;
-  --shadow: 0 10px 30px rgba(31, 26, 20, 0.08);
+  --bg: #f3f5f8;
+  --surface: #fcfdff;
+  --text: #141a22;
+  --muted: #5a6472;
+  --accent: #1a365d;
+  --border: #d4dae3;
+  --badge-bg: #e8eef5;
+  --shadow: 0 10px 30px rgba(20, 26, 34, 0.08);
   --epub: #2f6f4e;
   --pdf: #9b2c2c;
   --mobi: #3d5a80;
@@ -16,13 +16,13 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #171411;
-    --surface: #211c18;
-    --text: #f3ece2;
-    --muted: #b7aa9a;
-    --accent: #d4a574;
-    --border: #3a322b;
-    --badge-bg: #3a2f24;
+    --bg: #141820;
+    --surface: #1a2030;
+    --text: #eef2f7;
+    --muted: #9aa8b8;
+    --accent: #6ba3d6;
+    --border: #2d3544;
+    --badge-bg: #243044;
     --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
     --epub: #7bc99a;
     --pdf: #f08080;
@@ -47,7 +47,7 @@ body {
 }
 
 .container {
-  width: min(1180px, calc(100% - 2rem));
+  width: min(1680px, calc(100% - 1rem));
   margin: 0 auto;
 }
 
@@ -94,16 +94,14 @@ body {
 
 .filter-form--compact .filter-form__main {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(7.5rem, 9rem) minmax(4.5rem, 5rem) auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(7.5rem, 9rem) minmax(4.5rem, 5rem) minmax(max-content, auto);
   gap: 0.35rem;
   align-items: center;
 }
 
 .filter-input,
 .filter-form select,
-.filter-form input,
-.filter-form button,
-.filter-clear {
+.filter-form input:not([type="button"]):not([type="submit"]) {
   font: inherit;
   font-size: 0.92rem;
   padding: 0.38rem 0.5rem;
@@ -113,6 +111,21 @@ body {
   color: var(--text);
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+}
+
+.filter-form__buttons button,
+.filter-form__buttons .filter-clear,
+.filter-form__buttons .filter-help {
+  font: inherit;
+  font-size: 0.92rem;
+  padding: 0.38rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  color: var(--text);
+  width: auto;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -165,9 +178,11 @@ body {
 
 .filter-form__buttons {
   display: flex;
-  gap: 0.3rem;
+  gap: 0.35rem;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  min-width: max-content;
 }
 
 .sort-controls {
