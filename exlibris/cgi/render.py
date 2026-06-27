@@ -160,8 +160,10 @@ def _keyboard_help_dialog() -> str:
         <dd>Clear filters</dd>
         <dt><kbd>?</kbd></dt>
         <dd>Show this help</dd>
-        <dt><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dt>
+        <dt><kbd>←</kbd> / <kbd>→</kbd></dt>
         <dd>Previous / next page</dd>
+        <dt><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dt>
+        <dd>Scroll the page</dd>
       </dl>
       <button type="button" class="keyboard-help__close" data-keyboard-help-close>Close</button>
     </dialog>
@@ -245,7 +247,7 @@ def _pagination_nav(
         )
 
         return f"""    <nav {" ".join(attrs)}>
-{prev_link}      <span class="pagination__status">Page {page} · Random sample · Page Up/Down for another</span>
+{prev_link}      <span class="pagination__status">Page {page} · Random sample · ← → for another</span>
 {next_link}    </nav>
 """
 
@@ -291,7 +293,7 @@ def _pagination_nav(
 """
 
     return f"""    <nav {" ".join(attrs)}>
-{prev_link}      <span class="pagination__status">Page {page} of {max_page}</span>
+{prev_link}      <span class="pagination__status">Page {page} of {max_page} · ← → to browse</span>
 {jump_form}{next_link}    </nav>
 """
 

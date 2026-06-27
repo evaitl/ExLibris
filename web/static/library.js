@@ -126,27 +126,26 @@
       return;
     }
 
-    if (event.key !== "PageUp" && event.key !== "PageDown") {
-      return;
-    }
-    if (isTyping()) {
-      return;
-    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if (isTyping()) {
+        return;
+      }
 
-    const nav = document.querySelector("[data-page-nav]");
-    if (!nav) {
-      return;
-    }
+      const nav = document.querySelector("[data-page-nav]");
+      if (!nav) {
+        return;
+      }
 
-    const url =
-      event.key === "PageDown"
-        ? nav.getAttribute("data-next-url")
-        : nav.getAttribute("data-prev-url");
-    if (!url) {
-      return;
-    }
+      const url =
+        event.key === "ArrowRight"
+          ? nav.getAttribute("data-next-url")
+          : nav.getAttribute("data-prev-url");
+      if (!url) {
+        return;
+      }
 
-    event.preventDefault();
-    window.location.href = url;
+      event.preventDefault();
+      window.location.href = url;
+    }
   });
 })();
