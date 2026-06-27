@@ -111,6 +111,34 @@ rm -rf data/
 python scan_books.py
 ```
 
+### Scheduled scans (cron)
+
+To pick up new books automatically, run a daily scan at 4:00 AM. The helper script activates the project venv, runs `exlibris scan`, and appends output to `data/scan.log`:
+
+```bash
+chmod +x scripts/scan-library.sh
+```
+
+Edit your user crontab:
+
+```bash
+crontab -e
+```
+
+Add one line (replace `/path/to/ExLibris` with your clone location):
+
+```cron
+0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
+```
+
+Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip files already indexed by SHA-1, so a nightly run is usually quick unless many new books were added.
+
+Check recent scan output:
+
+```bash
+tail -f data/scan.log
+```
+
 ## Run the web UI
 
 ExLibris serves the library through a Python CGI frontend in `web/`.
