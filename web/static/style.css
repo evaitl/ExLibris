@@ -670,6 +670,32 @@ body {
   margin: 0.75rem 0 0;
 }
 
+.book-edit-form {
+  margin: 0.75rem 0 0.35rem;
+}
+
+.book-edit-form__fields {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.book-edit-form__label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.book-edit-form__name {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.book-edit-form__input {
+  max-width: 36rem;
+}
+
 .book-actions {
   display: flex;
   flex-wrap: wrap;

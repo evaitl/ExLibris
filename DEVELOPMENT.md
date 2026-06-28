@@ -29,21 +29,27 @@ data/               ← runtime data (gitignored)
   scan.log
 scan_books.py       ← standalone scan entry point
 exlibris/
-  schema/           ← SQL migrations (001–004)
+  schema/           ← SQL migrations (001–006)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
+  auth.py           ← scrypt passwords, signed session cookies
+  users.py          ← user CRUD, favorites
   ebook_meta.py     ← Calibre ebook-meta wrapper
-  fetch_metadata.py ← online metadata fetch (DB + covers only)
+  fetch_metadata.py ← online metadata fetch, restore embedded cover
   file_hash.py      ← SHA-1 for duplicate detection
   scanner.py        ← directory walk, per-book commit, dedup by hash
-  cgi/              ← shared query/render helpers for CGI
+  cgi/
+    common.py       ← queries, FTS-backed list_books, auth, favorites
+    search.py       ← FTS5 MATCH expression builder
+    render.py       ← HTML templates
 apache/
   exlibris.conf     ← path-based Apache config (/exlibris/)
 scripts/
   setup-data-dir.sh ← create/migrate data/ directory
   scan-library.sh   ← cron-friendly scan wrapper
 web/
-  cgi-bin/          ← index, book, cover, download, fetch_metadata
+  cgi-bin/          ← index, book, cover, download, fetch_metadata, restore_cover,
+                    ←   login, logout, register, favorite, edit_book
   static/
     style.css
     library.js      ← debounced search, keyboard shortcuts, sort arrows
@@ -131,12 +137,12 @@ sudo systemctl restart apache2   # pick up new group
 
 ### Search and filters
 
-Replaced publisher/genre dropdowns with text search (like title/author).
+**Full-text search (FTS5):** title, author, publisher, and genre filters use `books_fts` with prefix token matching. Language and favorites use ordinary SQL `WHERE` clauses. Migration `006_fts_extend.sql` adds `sort_title` and `tags` to the FTS index and rebuilds it from `books` — no EPUB rescan required.
 
-**Word-based matching:** input split on spaces; every word must match as case-insensitive substring.
+**Word-based matching:** input split on spaces; every word must match within its filter field. FTS uses `{columns} : ("word"*)` clauses combined with `AND`. Falls back to case-insensitive `LIKE` substring search if FTS query construction fails (e.g. punctuation-only input).
 
-- Title: matches `title`, `sort_title`, or `file_name`
-- Author, publisher, genre: match respective columns
+- Title: `title`, `sort_title`, `file_name`
+- Author, publisher, genre: `authors`, `publisher`, `tags`
 
 Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 
@@ -152,7 +158,6 @@ Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 
 **Not yet done (recommended for scale):**
 
-- Wire `books_fts` into UI (FTS exists; UI still uses `LIKE`)
 - Keyset pagination for very deep offsets
 
 ### Random sort
@@ -209,6 +214,8 @@ Detection in `exlibris/fetch_metadata.py`:
 | 2 | `002_covers.sql` | `cover_path` column |
 | 3 | `003_tags.sql` | `tags` column (genre/subjects) |
 | 4 | `004_content_hash.sql` | unique index on `content_hash` for dedup |
+| 5 | `005_users.sql` | `users`, `user_favorites` |
+| 6 | `006_fts_extend.sql` | extend `books_fts` with `sort_title`, `tags`; rebuild index |
 
 Key `books` columns: `file_path`, `content_hash`, `title`, `authors`, `publisher`, `published_date`, `language`, `description`, `tags`, `cover_path`, `first_seen_at`, `last_scanned_at`, `is_missing`.
 
@@ -233,10 +240,12 @@ On Debian/Ubuntu: `sudo apt install python3-venv python3-pip calibre`
 ## CLI and cron
 
 ```bash
-exlibris scan                         # scan default /media/books
+exlibris scan                         # scan default /media/books (also runs DB migrations)
 exlibris scan --path ~/foo              # additional paths
+exlibris user create NAME               # create web login (scrypt password hash)
 python scan_books.py -v                 # standalone scanner, verbose
-./scripts/setup-data-dir.sh             # create data/ directory
+python scan_books.py -q                 # scan without per-file progress
+./scripts/setup-data-dir.sh             # create data/ directory; chmod entry-point scripts
 ./scripts/scan-library.sh               # manual or cron scan
 ```
 
@@ -245,6 +254,18 @@ Cron example (4 AM daily):
 ```cron
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
+
+---
+
+## Session 3 — Accounts, curation, FTS (June 2026)
+
+- **User accounts:** `005_users.sql`; scrypt passwords; login/logout/register CGI; `exlibris user create`
+- **Favorites:** per-user `user_favorites`; checkbox on detail page; **Favorites only** library filter (login required)
+- **Cover curation:** reject Google/Open Library placeholder images; **restore cover from file**; manual **edit title & author**
+- **Scan:** per-file progress; skip unchanged files and hash duplicates before Calibre
+- **FTS search:** `006_fts_extend.sql`; `exlibris/cgi/search.py`; library UI uses `books_fts MATCH`
+- **Toolbar:** flex layout fix; narrower language dropdown
+- **Scripts:** `scan_books.py`, `scripts/*.sh`, all shebang CGI entry points marked executable in git
 
 ---
 
@@ -269,23 +290,26 @@ Cron example (4 AM daily):
 
 - **UI:** CGI only; minimal JS in `library.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`
-- **Library browse:** paginated, word-search filters, random sort, keyboard navigation
+- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files before Calibre
+- **Library browse:** paginated FTS search, favorites filter, random sort, keyboard navigation
+- **Accounts:** optional login for favorites only; web or CLI registration
+- **Curation:** edit title/author, fetch metadata, restore embedded cover
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
-- **Scale target:** ~600K books — pagination and LIKE search work; FTS recommended next
+- **Scale target:** ~600K books — FTS + pagination in place; keyset pagination still open
 
 ---
 
 ## Possible Follow-ups
 
-- Full-text search (`books_fts`) in the web UI
+- Mark books `is_missing` when files disappear from disk
 - Genre/language links from book detail back to filtered library
 - Scan status in header (`data/scan.log` or DB)
 - Faceted filter counts (e.g. language with book counts)
 - Keyset pagination for deep pages
-- Progress indicator during long scans
-- Detect additional cover placeholder sources (Google Books edge cases)
+- Favorite indicator on library grid cards
+- Optional disable open registration; protect metadata edits behind login
+- Extend manual edit to publisher, tags, series
 
 ---
 

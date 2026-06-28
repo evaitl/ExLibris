@@ -16,6 +16,7 @@ from exlibris.auth import (
     parse_session_token,
     session_secret,
 )
+from exlibris.cgi.search import build_fts_match, search_words
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,10 @@ def favorite_action() -> str:
     return cgi_script("favorite.py")
 
 
+def edit_book_action() -> str:
+    return cgi_script("edit_book.py")
+
+
 def cover_cache_version(book: BookRow) -> str:
     """Cache-bust token for cover URLs; uses file mtime when the cover exists on disk."""
     if book.cover_path:
@@ -282,11 +287,11 @@ def row_to_book(row: sqlite3.Row) -> BookRow:
 
 
 SORT_COLUMNS = {
-    "title": "COALESCE(NULLIF(sort_title, ''), NULLIF(title, ''), file_name) COLLATE NOCASE",
-    "author": "authors COLLATE NOCASE",
-    "published": "published_date",
-    "size": "file_size",
-    "scanned": "last_scanned_at",
+    "title": "COALESCE(NULLIF(books.sort_title, ''), NULLIF(books.title, ''), books.file_name) COLLATE NOCASE",
+    "author": "books.authors COLLATE NOCASE",
+    "published": "books.published_date",
+    "size": "books.file_size",
+    "scanned": "books.last_scanned_at",
 }
 
 DEFAULT_SORT_DIR = {
@@ -323,7 +328,7 @@ def sort_order_by(sort: str, sort_dir: str) -> str:
         return "RANDOM()"
     direction = normalize_sort_dir(sort, sort_dir).upper()
     if sort == "published":
-        return f"published_date IS NULL, published_date {direction}"
+        return f"books.published_date IS NULL, books.published_date {direction}"
     column = SORT_COLUMNS.get(sort, SORT_COLUMNS["title"])
     return f"{column} {direction}"
 
@@ -351,7 +356,7 @@ def load_filter_options(conn: sqlite3.Connection) -> FilterOptions:
 
 
 def _search_words(text: str) -> list[str]:
-    return [word for word in text.split() if word]
+    return search_words(text)
 
 
 def _append_word_match(
@@ -488,54 +493,105 @@ def _book_filter_clause(
     sort_dir: str = "asc",
     favorites_only: bool = False,
     user_id: int | None = None,
-) -> tuple[list[str], list[object], str]:
+) -> tuple[str | None, list[str], list[object], str]:
     order_by = sort_order_by(sort, sort_dir)
     params: list[object] = []
-    where: list[str] = ["is_missing = 0"]
+    where: list[str] = ["books.is_missing = 0"]
+    fts_match = build_fts_match(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+    )
 
     if favorites_only and user_id is not None:
         where.append(
-            "id IN (SELECT book_id FROM user_favorites WHERE user_id = ?)"
+            "books.id IN (SELECT book_id FROM user_favorites WHERE user_id = ?)"
         )
         params.append(user_id)
 
-    if title.strip():
-        _append_word_match(
-            where,
-            params,
-            words=_search_words(title),
-            columns=["title", "sort_title", "file_name"],
-        )
-
-    if author.strip():
-        _append_word_match(
-            where,
-            params,
-            words=_search_words(author),
-            columns=["authors"],
-        )
-
-    if publisher.strip():
-        _append_word_match(
-            where,
-            params,
-            words=_search_words(publisher),
-            columns=["publisher"],
-        )
-
-    if genre.strip():
-        _append_word_match(
-            where,
-            params,
-            words=_search_words(genre),
-            columns=["tags"],
-        )
+    if fts_match is None:
+        if title.strip():
+            _append_word_match(
+                where,
+                params,
+                words=_search_words(title),
+                columns=["books.title", "books.sort_title", "books.file_name"],
+            )
+        if author.strip():
+            _append_word_match(
+                where,
+                params,
+                words=_search_words(author),
+                columns=["books.authors"],
+            )
+        if publisher.strip():
+            _append_word_match(
+                where,
+                params,
+                words=_search_words(publisher),
+                columns=["books.publisher"],
+            )
+        if genre.strip():
+            _append_word_match(
+                where,
+                params,
+                words=_search_words(genre),
+                columns=["books.tags"],
+            )
 
     if language:
-        where.append("language = ?")
+        where.append("books.language = ?")
         params.append(language)
 
-    return where, params, order_by
+    return fts_match, where, params, order_by
+
+
+def _filtered_count_sql(
+    fts_match: str | None, where: list[str], params: list[object]
+) -> tuple[str, list[object]]:
+    where_sql = " AND ".join(where)
+    if fts_match:
+        sql = (
+            "SELECT COUNT(*) FROM books "
+            "INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql}"
+        )
+        return sql, [fts_match, *params]
+    return f"SELECT COUNT(*) FROM books WHERE {where_sql}", list(params)
+
+
+def _select_books_sql(
+    fts_match: str | None,
+    where: list[str],
+    params: list[object],
+    order_by: str,
+    *,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> tuple[str, list[object]]:
+    where_sql = " AND ".join(where)
+    if fts_match:
+        sql = (
+            "SELECT books.* FROM books "
+            "INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql} "
+            f"ORDER BY {order_by}, books.id"
+        )
+        query_params: list[object] = [fts_match, *params]
+    else:
+        sql = (
+            f"SELECT books.* FROM books WHERE {where_sql} "
+            f"ORDER BY {order_by}, books.id"
+        )
+        query_params = list(params)
+    if limit is not None:
+        sql += " LIMIT ?"
+        query_params.append(limit)
+    if offset is not None:
+        sql += " OFFSET ?"
+        query_params.append(offset)
+    return sql, query_params
 
 
 def list_books(
@@ -561,7 +617,7 @@ def list_books(
     )
     options = load_filter_options(conn)
 
-    where, params, order_by = _book_filter_clause(
+    fts_match, where, params, order_by = _book_filter_clause(
         title=title,
         author=author,
         publisher=publisher,
@@ -572,11 +628,9 @@ def list_books(
         favorites_only=favorites_only,
         user_id=user_id,
     )
-    where_sql = " AND ".join(where)
 
-    filtered_count = int(
-        conn.execute(f"SELECT COUNT(*) FROM books WHERE {where_sql}", params).fetchone()[0]
-    )
+    count_sql, count_params = _filtered_count_sql(fts_match, where, params)
+    filtered_count = int(conn.execute(count_sql, count_params).fetchone()[0])
 
     page = max(1, page)
 
@@ -584,16 +638,21 @@ def list_books(
         limit = min(page_size, filtered_count) if filtered_count else 0
         if limit == 0:
             return [], filtered_count, library_total, page, options
-        rows = conn.execute(
-            f"""
-            SELECT *
-            FROM books
-            WHERE {where_sql}
-            ORDER BY RANDOM()
-            LIMIT ?
-            """,
-            [*params, limit],
-        ).fetchall()
+        if fts_match:
+            random_sql = (
+                "SELECT books.* FROM books "
+                "INNER JOIN books_fts ON books_fts.rowid = books.id "
+                f"WHERE books_fts MATCH ? AND {' AND '.join(where)} "
+                "ORDER BY RANDOM() LIMIT ?"
+            )
+            random_params: list[object] = [fts_match, *params, limit]
+        else:
+            random_sql = (
+                f"SELECT books.* FROM books WHERE {' AND '.join(where)} "
+                "ORDER BY RANDOM() LIMIT ?"
+            )
+            random_params = [*params, limit]
+        rows = conn.execute(random_sql, random_params).fetchall()
         return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
 
     max_page = max(1, (filtered_count + page_size - 1) // page_size)
@@ -601,16 +660,15 @@ def list_books(
         page = max_page
 
     offset = (page - 1) * page_size
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM books
-        WHERE {where_sql}
-        ORDER BY {order_by}, id
-        LIMIT ? OFFSET ?
-        """,
-        [*params, page_size, offset],
-    ).fetchall()
+    select_sql, select_params = _select_books_sql(
+        fts_match,
+        where,
+        params,
+        order_by,
+        limit=page_size,
+        offset=offset,
+    )
+    rows = conn.execute(select_sql, select_params).fetchall()
 
     return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
 
@@ -627,3 +685,20 @@ def update_book_fields(conn: sqlite3.Connection, book_id: int, fields: dict[str,
     values = list(fields.values()) + [book_id]
     conn.execute(f"UPDATE books SET {columns} WHERE id = ?", values)
     conn.commit()
+
+
+class EditBookError(Exception):
+    pass
+
+
+def title_author_edit_fields(*, title: str | None, authors: str | None) -> dict[str, object]:
+    """Validate and build DB updates for a manual title/author edit."""
+    cleaned_title = (title or "").strip()
+    cleaned_authors = (authors or "").strip()
+    if not cleaned_title:
+        raise EditBookError("Title cannot be empty.")
+    return {
+        "title": cleaned_title,
+        "authors": cleaned_authors or None,
+        "sort_title": None,
+    }

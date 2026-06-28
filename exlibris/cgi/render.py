@@ -14,6 +14,7 @@ from exlibris.cgi.common import (
     cover_href,
     download_href,
     esc,
+    edit_book_action,
     favorite_action,
     fetch_metadata_action,
     login_action,
@@ -584,9 +585,7 @@ def render_book_detail(
     is_favorite: bool = False,
 ) -> str:
     title = book.title or book.file_name
-    subtitle = (
-        f'      <p class="subtitle">by {esc(book.authors)}</p>\n' if book.authors else ""
-    )
+    authors_value = book.authors or ""
     series_block = ""
     if book.series:
         index = f" #{book.series_index:g}" if book.series_index is not None else ""
@@ -662,8 +661,21 @@ def render_book_detail(
         <div class="book-detail__content">
           <header class="book-detail__header">
             <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
-            <h1>{esc(title)}</h1>
-{subtitle}{favorite_form}            <p class="book-actions">
+            <form class="book-edit-form" method="post" action="{esc(edit_book_action())}">
+              <input type="hidden" name="id" value="{book.id}">
+              <div class="book-edit-form__fields">
+                <label class="book-edit-form__label">
+                  <span class="book-edit-form__name">Title</span>
+                  <input class="filter-input book-edit-form__input" type="text" name="title" value="{esc(title)}" required maxlength="500">
+                </label>
+                <label class="book-edit-form__label">
+                  <span class="book-edit-form__name">Author</span>
+                  <input class="filter-input book-edit-form__input" type="text" name="authors" value="{esc(authors_value)}" maxlength="500">
+                </label>
+              </div>
+              <button type="submit" class="button button--fetch">Save title &amp; author</button>
+            </form>
+{favorite_form}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
               <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">

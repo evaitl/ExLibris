@@ -32,6 +32,12 @@ if [[ -d "$ROOT/covers" ]]; then
   fi
 fi
 
+for script in "$ROOT/scan_books.py" "$ROOT"/scripts/*.sh "$ROOT"/web/cgi-bin/*.py; do
+  if [[ -f "$script" ]] && head -1 "$script" | grep -q '^#!'; then
+    chmod +x "$script"
+  fi
+done
+
 echo ""
 echo "Data directory: $DATA"
 echo ""

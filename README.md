@@ -96,8 +96,9 @@ exlibris scan --path ~/Downloads/ebooks --path ~/Books
 The scanner:
 
 - Walks each path recursively for `.epub` files
-- Computes SHA-1 to skip duplicate files
-- Reads metadata with `ebook-meta`
+- Shows per-file progress (`[n/total]`) unless `--quiet`
+- Computes SHA-1 and skips duplicate or unchanged files **before** calling Calibre
+- Reads metadata with `ebook-meta` only for new or changed files
 - Saves cover images to `data/covers/`
 - Upserts records into `data/library.db`
 
@@ -145,14 +146,37 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 ### Web UI features
 
-- **Search** by title, author, publisher, genre (tags), and language — each word in a field must match (case-insensitive)
+- **Full-text search** (FTS5) by title, author, publisher, and genre — fast on large libraries; no rescan needed
+- **Search** filters — each word in a field must match (prefix/token search via FTS; falls back to substring `LIKE` if needed)
 - **Pagination** with configurable page size (10, 25, 50, 100, or 200)
 - **Jump to page** and **sort** by title, author, published date, size, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
 - **Debounced search** — filters apply automatically ~1s after you stop typing
 - **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page)
-- Book detail pages with cover, formatted dates, file name, HTML descriptions, download, and **Fetch metadata online**
-- Fetch updates metadata only; existing covers are kept when online sources return no real image
+- **Accounts** — optional login to save **favorites** (browse and download work without an account)
+- **Favorites only** filter when signed in; favorite checkbox on book detail pages
+- Book detail pages with cover, formatted dates, file name, HTML descriptions, download
+- **Edit title & author** on the detail page (stored in the database only; EPUB files are not modified)
+- **Fetch metadata online** and **restore cover from file** (embedded EPUB cover)
+- Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
+
+### User accounts
+
+Accounts are only required for favorites. Create them from the web (**Create account** in the header) or on the server:
+
+```bash
+exlibris user create yourname
+```
+
+Passwords are stored as scrypt hashes, never plain text.
+
+After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
+
+```bash
+exlibris scan
+```
+
+Incremental scans are quick when nothing changed.
 
 ### CGI environment variables
 
@@ -162,6 +186,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 | `EXLIBRIS_CGI_PREFIX` | URL prefix for CGI scripts (e.g. `/exlibris/cgi-bin/`) |
 | `EXLIBRIS_STATIC_URL` | URL to the CSS file (e.g. `/exlibris/static/style.css`) |
 | `EXLIBRIS_COVERS_DIR` | Path to cover images (set automatically in `apache/exlibris.conf`) |
+| `EXLIBRIS_SESSION_SECRET` | Optional secret for signed login cookies (recommended in production) |
 
 Downloads are served only from files under configured scan paths (default: `/media/books`). Fetch metadata updates the database and cover images only — EPUB files are not modified.
 

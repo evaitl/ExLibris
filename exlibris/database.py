@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def get_engine(db_path: Path) -> Engine:
