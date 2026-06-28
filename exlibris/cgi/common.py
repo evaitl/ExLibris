@@ -291,6 +291,7 @@ SORT_COLUMNS = {
     "author": "books.authors COLLATE NOCASE",
     "published": "books.published_date",
     "size": "books.file_size",
+    "pages": "books.page_count",
     "scanned": "books.last_scanned_at",
 }
 
@@ -299,6 +300,7 @@ DEFAULT_SORT_DIR = {
     "author": "asc",
     "published": "desc",
     "size": "desc",
+    "pages": "desc",
     "scanned": "desc",
 }
 
@@ -329,6 +331,8 @@ def sort_order_by(sort: str, sort_dir: str) -> str:
     direction = normalize_sort_dir(sort, sort_dir).upper()
     if sort == "published":
         return f"books.published_date IS NULL, books.published_date {direction}"
+    if sort == "pages":
+        return f"books.page_count IS NULL, books.page_count {direction}"
     column = SORT_COLUMNS.get(sort, SORT_COLUMNS["title"])
     return f"{column} {direction}"
 
@@ -711,5 +715,5 @@ def title_author_edit_fields(*, title: str | None, authors: str | None) -> dict[
     return {
         "title": cleaned_title,
         "authors": cleaned_authors or None,
-        "sort_title": None,
+        "sort_title": cleaned_title,
     }

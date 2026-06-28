@@ -150,14 +150,14 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Full-text search** (FTS5) by title, author, publisher, and genre — fast on large libraries; no rescan needed
 - **Search** filters — each word in a field must match (prefix/token search via FTS; falls back to substring `LIKE` if needed)
 - **Pagination** with configurable page size (10, 25, 50, 100, or 200)
-- **Jump to page** and **sort** by title, author, published date, size, last scanned, or random
+- **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
 - **Debounced search** — filters apply automatically ~1s after you stop typing
 - **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages
 - Book detail pages with cover, formatted dates, file name, HTML descriptions, download
-- **Edit title & author** on the detail page (stored in the database only; EPUB files are not modified)
+- **Edit title & author** on the detail page (stored in the database only; EPUB files are not modified; sort title follows the edited title)
 - **Fetch metadata online** and **restore cover from file** (embedded EPUB cover)
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
 

@@ -75,7 +75,7 @@ web/
 - Covers (`002_covers.sql`), tags (`003_tags.sql`)
 - EPUB-only scanner; FastAPI viewer removed in favor of CGI only
 - Incremental scan with WAL mode for live UI updates during long scans
-- Sort by title, author, published date, size, last scanned
+- Sort by title, author, published date, size, page count, last scanned
 - Apache path-based deployment documented
 - Initial push to https://github.com/evaitl/ExLibris.git
 
@@ -166,7 +166,7 @@ Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 
 ### Sort direction
 
-↑/↓ arrows next to sort dropdown toggle ascending/descending. Defaults: title/author asc; published/size/scanned desc. Hidden for Random sort.
+↑/↓ arrows next to sort dropdown toggle ascending/descending. Defaults: title/author asc; published/size/pages/scanned desc. Hidden for Random sort.
 
 ### Keyboard shortcuts (`web/static/library.js`)
 
@@ -293,7 +293,7 @@ Cron example (4 AM daily):
 - **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files before Calibre; missing files hidden from browse
 - **Library browse:** paginated FTS search, favorites filter, random sort, keyboard navigation
 - **Accounts:** optional login for favorites only; web or CLI registration
-- **Curation:** edit title/author, fetch metadata, restore embedded cover
+- **Curation:** edit title/author (updates sort title), fetch metadata, restore embedded cover
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
 - **Scale target:** ~600K books — FTS + pagination in place; keyset pagination still open

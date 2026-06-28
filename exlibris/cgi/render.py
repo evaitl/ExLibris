@@ -352,7 +352,7 @@ def render_library(
     page_size = normalize_page_size(page_size)
     sort_selected = {
         key: " selected" if sort == key else ""
-        for key in ("title", "author", "published", "size", "scanned", "random")
+        for key in ("title", "author", "published", "size", "pages", "scanned", "random")
     }
 
     if books:
@@ -465,6 +465,7 @@ def render_library(
               <option value="author"{sort_selected["author"]}>Author</option>
               <option value="published"{sort_selected["published"]}>Published</option>
               <option value="size"{sort_selected["size"]}>Size</option>
+              <option value="pages"{sort_selected["pages"]}>Pages</option>
               <option value="scanned"{sort_selected["scanned"]}>Scanned</option>
               <option value="random"{sort_selected["random"]}>Random</option>
             </select>
