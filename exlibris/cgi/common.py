@@ -673,8 +673,19 @@ def list_books(
     return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
 
 
-def get_book(conn: sqlite3.Connection, book_id: int) -> BookRow | None:
-    row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+def get_book(
+    conn: sqlite3.Connection,
+    book_id: int,
+    *,
+    include_missing: bool = False,
+) -> BookRow | None:
+    if include_missing:
+        row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM books WHERE id = ? AND is_missing = 0",
+            (book_id,),
+        ).fetchone()
     return row_to_book(row) if row else None
 
 

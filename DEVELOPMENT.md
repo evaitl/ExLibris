@@ -262,7 +262,7 @@ Cron example (4 AM daily):
 - **User accounts:** `005_users.sql`; scrypt passwords; login/logout/register CGI; `exlibris user create`
 - **Favorites:** per-user `user_favorites`; checkbox on detail page; **Favorites only** library filter (login required)
 - **Cover curation:** reject Google/Open Library placeholder images; **restore cover from file**; manual **edit title & author**
-- **Scan:** per-file progress; skip unchanged files and hash duplicates before Calibre
+- **Scan:** per-file progress; skip unchanged files before Calibre; mark books missing when absent from scanned paths (metadata retained)
 - **FTS search:** `006_fts_extend.sql`; `exlibris/cgi/search.py`; library UI uses `books_fts MATCH`
 - **Toolbar:** flex layout fix; narrower language dropdown
 - **Scripts:** `scan_books.py`, `scripts/*.sh`, all shebang CGI entry points marked executable in git
@@ -290,7 +290,7 @@ Cron example (4 AM daily):
 
 - **UI:** CGI only; minimal JS in `library.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files before Calibre
+- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files before Calibre; missing files hidden from browse
 - **Library browse:** paginated FTS search, favorites filter, random sort, keyboard navigation
 - **Accounts:** optional login for favorites only; web or CLI registration
 - **Curation:** edit title/author, fetch metadata, restore embedded cover
@@ -302,7 +302,6 @@ Cron example (4 AM daily):
 
 ## Possible Follow-ups
 
-- Mark books `is_missing` when files disappear from disk
 - Genre/language links from book detail back to filtered library
 - Scan status in header (`data/scan.log` or DB)
 - Faceted filter counts (e.g. language with book counts)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
@@ -25,6 +25,7 @@ class ScanStats:
     added_or_updated: int = 0
     skipped: int = 0
     unchanged: int = 0
+    marked_missing: int = 0
     errors: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -44,27 +45,65 @@ def iter_book_files(root: Path):
             yield path.resolve()
 
 
-def collect_book_files(paths: list[Path]) -> tuple[list[Path], list[str]]:
-    """Gather ebook paths from scan roots. Returns (files, errors)."""
+def collect_book_files(
+    paths: list[Path],
+) -> tuple[list[Path], list[Path], list[str]]:
+    """Gather ebook paths from scan roots. Returns (files, scanned_roots, errors)."""
     files: list[Path] = []
+    scanned_roots: list[Path] = []
     errors: list[str] = []
     for root in paths:
         root = resolve_scan_path(root)
         if not root.exists():
             errors.append(f"path not found: {root}")
             continue
+        scanned_roots.append(root)
         files.extend(iter_book_files(root))
-    return files, errors
+    return files, scanned_roots, errors
+
+
+def _books_under_root(root: Path):
+    """Books indexed under a scan root (exact path or nested files)."""
+    root_str = str(root)
+    return select(Book).where(
+        Book.is_missing.is_(False),
+        or_(Book.file_path == root_str, Book.file_path.like(f"{root_str}/%")),
+    )
+
+
+def mark_missing_books(
+    session: Session,
+    scanned_roots: list[Path],
+    seen_paths: set[str],
+) -> int:
+    """Mark indexed books missing when absent from a completed scan of their root."""
+    marked = 0
+    for root in scanned_roots:
+        for book in session.scalars(_books_under_root(root)):
+            if book.file_path not in seen_paths:
+                book.is_missing = True
+                marked += 1
+    if marked:
+        session.commit()
+    return marked
+
+
+def _mark_file_present(session: Session, existing: Book | None) -> bool:
+    """Clear is_missing when a file is seen on disk again (e.g. remounted volume)."""
+    if existing is not None and existing.is_missing:
+        existing.is_missing = False
+        session.add(existing)
+        return True
+    return False
 
 
 def _skip_reason_before_calibre(
     session: Session,
     *,
-    file_path_str: str,
+    existing: Book | None,
     content_hash: str,
 ) -> str | None:
     """Return a skip reason when Calibre should not run (hash checks only)."""
-    existing = session.scalar(select(Book).where(Book.file_path == file_path_str))
     canonical = find_book_by_content_hash(session, content_hash)
 
     if canonical is not None and (
@@ -75,11 +114,18 @@ def _skip_reason_before_calibre(
     if (
         existing is not None
         and existing.content_hash == content_hash
-        and not existing.is_missing
     ):
         return "unchanged"
 
     return None
+
+
+def _unchanged_by_stat(existing: Book, *, file_size: int, file_mtime: float) -> bool:
+    """True when the file at this path matches stored size and mtime (no hash read)."""
+    return (
+        existing.file_size == file_size
+        and existing.file_mtime == file_mtime
+    )
 
 
 def print_scan_progress(current: int, total: int, path: Path, status: str) -> None:
@@ -100,9 +146,10 @@ def scan_paths(
     now = datetime.now(timezone.utc)
     covers_root = resolve_covers_dir(covers_dir)
 
-    book_files, path_errors = collect_book_files(paths)
+    book_files, scanned_roots, path_errors = collect_book_files(paths)
     stats.errors.extend(path_errors)
     total = len(book_files)
+    seen_paths: set[str] = set()
 
     if on_progress and total:
         print(f"Scanning {total:,} ebook file(s)...", flush=True)
@@ -112,11 +159,30 @@ def scan_paths(
         try:
             stat = file_path.stat()
             file_path_str = str(file_path)
+            seen_paths.add(file_path_str)
+
+            existing = session.scalar(
+                select(Book).where(Book.file_path == file_path_str)
+            )
+            if _mark_file_present(session, existing):
+                session.commit()
+
+            if existing is not None and _unchanged_by_stat(
+                existing,
+                file_size=stat.st_size,
+                file_mtime=stat.st_mtime,
+            ):
+                stats.unchanged += 1
+                if on_progress:
+                    on_progress(index, total, file_path, "unchanged")
+                elif verbose:
+                    print(f"unchanged: {file_path.name}", flush=True)
+                continue
 
             content_hash = sha1_file(file_path)
             skip_reason = _skip_reason_before_calibre(
                 session,
-                file_path_str=file_path_str,
+                existing=existing,
                 content_hash=content_hash,
             )
             if skip_reason == "duplicate":
@@ -195,5 +261,15 @@ def scan_paths(
             stats.errors.append(f"{file_path}: {exc}")
             if on_progress:
                 on_progress(index, total, file_path, "error")
+
+    if scanned_roots:
+        stats.marked_missing = mark_missing_books(
+            session, scanned_roots, seen_paths
+        )
+        if stats.marked_missing and verbose:
+            print(
+                f"marked {stats.marked_missing} book(s) missing",
+                flush=True,
+            )
 
     return stats

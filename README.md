@@ -97,7 +97,8 @@ The scanner:
 
 - Walks each path recursively for `.epub` files
 - Shows per-file progress (`[n/total]`) unless `--quiet`
-- Computes SHA-1 and skips duplicate or unchanged files **before** calling Calibre
+- Skips unchanged files when size and mtime match the database (no file read); otherwise computes SHA-1 to detect duplicates or content changes before calling Calibre
+- Marks books **missing** when their file is absent from a scanned path (metadata kept; hidden from the web UI until the file reappears)
 - Reads metadata with `ebook-meta` only for new or changed files
 - Saves cover images to `data/covers/`
 - Upserts records into `data/library.db`

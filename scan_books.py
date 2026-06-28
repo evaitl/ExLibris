@@ -70,6 +70,8 @@ def _format_summary(stats) -> str:
         parts.append(f"skipped {stats.skipped} duplicate(s)")
     if stats.unchanged:
         parts.append(f"skipped {stats.unchanged} unchanged")
+    if stats.marked_missing:
+        parts.append(f"marked {stats.marked_missing} missing")
     return "; ".join(parts)
 
 

@@ -57,6 +57,8 @@ def scan(
         summary += f", skipped {stats.skipped} duplicates"
     if stats.unchanged:
         summary += f", skipped {stats.unchanged} unchanged"
+    if stats.marked_missing:
+        summary += f", marked {stats.marked_missing} missing"
     typer.echo(f"{summary}.")
     if stats.errors:
         typer.echo(f"{len(stats.errors)} issue(s):")
