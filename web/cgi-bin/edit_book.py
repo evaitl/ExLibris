@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CGI entry point: update a book title and author."""
+"""CGI entry point: update book metadata (administrators only)."""
 
 from __future__ import annotations
 
@@ -17,10 +17,11 @@ if str(ROOT) not in sys.path:
 from exlibris.cgi.common import (
     EditBookError,
     book_detail_context,
+    book_edit_fields,
     connect,
     connect_rw,
     get_book,
-    title_author_edit_fields,
+    is_admin,
     update_book_fields,
 )
 from exlibris.cgi.render import render_book_detail, render_error
@@ -46,16 +47,30 @@ def main() -> None:
     book_id = int(raw_id)
     title = form.getfirst("title")
     authors = form.getfirst("authors")
+    genre = form.getfirst("genre")
+
+    with connect() as conn:
+        current_user, is_favorite = book_detail_context(conn, book_id)
+        book = get_book(conn, book_id)
+
+    if book is None:
+        _html(render_error("Book not found.", status_hint="Not found"))
+        return
+
+    if not is_admin(current_user):
+        _html(
+            render_book_detail(
+                book,
+                error="Only administrators can edit book metadata.",
+                current_user=current_user,
+                is_favorite=is_favorite,
+            )
+        )
+        return
 
     try:
-        fields = title_author_edit_fields(title=title, authors=authors)
+        fields = book_edit_fields(title=title, authors=authors, genre=genre)
     except EditBookError as exc:
-        with connect() as conn:
-            book = get_book(conn, book_id)
-            current_user, is_favorite = book_detail_context(conn, book_id)
-        if book is None:
-            _html(render_error(str(exc)))
-            return
         _html(
             render_book_detail(
                 book,
@@ -84,7 +99,7 @@ def main() -> None:
         _html(
             render_book_detail(
                 book,
-                notice="Title and author updated",
+                notice="Book metadata updated",
                 current_user=current_user,
                 is_favorite=is_favorite,
             )

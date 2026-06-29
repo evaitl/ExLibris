@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
+from exlibris.admins import is_admin_username
 from exlibris.auth import (
     SESSION_COOKIE,
     create_session_token,
@@ -486,6 +487,10 @@ def book_detail_context(
     return user, favorite
 
 
+def is_admin(user: UserRow | None) -> bool:
+    return is_admin_username(user.username if user is not None else None)
+
+
 def _book_filter_clause(
     *,
     title: str,
@@ -706,14 +711,21 @@ class EditBookError(Exception):
     pass
 
 
-def title_author_edit_fields(*, title: str | None, authors: str | None) -> dict[str, object]:
-    """Validate and build DB updates for a manual title/author edit."""
+def book_edit_fields(
+    *,
+    title: str | None,
+    authors: str | None,
+    genre: str | None,
+) -> dict[str, object]:
+    """Validate and build DB updates for a manual metadata edit."""
     cleaned_title = (title or "").strip()
     cleaned_authors = (authors or "").strip()
+    cleaned_genre = (genre or "").strip()
     if not cleaned_title:
         raise EditBookError("Title cannot be empty.")
     return {
         "title": cleaned_title,
         "authors": cleaned_authors or None,
         "sort_title": cleaned_title,
+        "tags": cleaned_genre or None,
     }

@@ -666,8 +666,15 @@ body {
   box-shadow: var(--shadow);
 }
 
-.book-detail__header h1 {
+.book-detail__header h1,
+.book-detail__title {
   margin: 0.75rem 0 0;
+}
+
+.book-detail__author {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
 }
 
 .book-edit-form {

@@ -157,7 +157,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages
 - Book detail pages with cover, formatted dates, file name, HTML descriptions, download
-- **Edit title & author** on the detail page (stored in the database only; EPUB files are not modified; sort title follows the edited title)
+- **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified)
 - **Fetch metadata online** and **restore cover from file** (embedded EPUB cover)
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
 
@@ -170,6 +170,8 @@ exlibris user create yourname
 ```
 
 Passwords are stored as scrypt hashes, never plain text.
+
+**Administrators:** list usernames in `admins.txt` (one per line) to allow editing title, author, and genre on book detail pages. The user must be logged in and registered under that username.
 
 After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
 

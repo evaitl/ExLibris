@@ -24,6 +24,7 @@ from exlibris.cgi.common import (
     format_published_date,
     format_size,
     has_search_filters,
+    is_admin,
     normalize_page_size,
     normalize_sort_dir,
     static_asset,
@@ -587,6 +588,8 @@ def render_book_detail(
 ) -> str:
     title = book.title or book.file_name
     authors_value = book.authors or ""
+    genre_value = book.tags or ""
+    user_is_admin = is_admin(current_user)
     series_block = ""
     if book.series:
         index = f" #{book.series_index:g}" if book.series_index is not None else ""
@@ -605,6 +608,10 @@ def render_book_detail(
         ("Pages", str(book.page_count) if book.page_count is not None else None),
         ("File name", book.file_name),
     ]
+    if user_is_admin:
+        optional_fields = [
+            field for field in optional_fields if field[0] != "Genre"
+        ]
     meta_items = "\n".join(
         f"""        <div>
           <dt>{esc(label)}</dt>
@@ -654,15 +661,8 @@ def render_book_detail(
         favorite_form = f"""            <p class="favorite-login"><a href="{esc(login_action())}?next=book.py%3Fid%3D{book.id}">Log in</a> or <a href="{esc(register_action())}?next=book.py%3Fid%3D{book.id}">create an account</a> to save favorites</p>
 """
 
-    body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
-{flash}
-    <article class="book-detail">
-      <div class="book-detail__layout">
-        {_cover_img(book, css_class="book-cover book-cover--large")}
-        <div class="book-detail__content">
-          <header class="book-detail__header">
-            <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
-            <form class="book-edit-form" method="post" action="{esc(edit_book_action())}">
+    if user_is_admin:
+        title_author_block = f"""            <form class="book-edit-form" method="post" action="{esc(edit_book_action())}">
               <input type="hidden" name="id" value="{book.id}">
               <div class="book-edit-form__fields">
                 <label class="book-edit-form__label">
@@ -673,9 +673,29 @@ def render_book_detail(
                   <span class="book-edit-form__name">Author</span>
                   <input class="filter-input book-edit-form__input" type="text" name="authors" value="{esc(authors_value)}" maxlength="500">
                 </label>
+                <label class="book-edit-form__label">
+                  <span class="book-edit-form__name">Genre</span>
+                  <input class="filter-input book-edit-form__input" type="text" name="genre" value="{esc(genre_value)}" maxlength="500">
+                </label>
               </div>
-              <button type="submit" class="button button--fetch">Save title &amp; author</button>
+              <button type="submit" class="button button--fetch">Save metadata</button>
             </form>
+"""
+    else:
+        author_display = esc(authors_value) if authors_value else "Unknown author"
+        title_author_block = f"""            <h1 class="book-detail__title">{esc(title)}</h1>
+            <p class="book-detail__author">{author_display}</p>
+"""
+
+    body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+{flash}
+    <article class="book-detail">
+      <div class="book-detail__layout">
+        {_cover_img(book, css_class="book-cover book-cover--large")}
+        <div class="book-detail__content">
+          <header class="book-detail__header">
+            <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
+{title_author_block}
 {favorite_form}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
               <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">

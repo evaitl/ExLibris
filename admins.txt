@@ -1,0 +1,2 @@
+# ExLibris administrators — one username per line.
+# Usernames must match registered accounts. Lines starting with # are ignored.
