@@ -202,7 +202,7 @@ def _keyboard_help_dialog() -> str:
         <dt><kbd>?</kbd></dt>
         <dd>Show this help</dd>
         <dt><kbd>←</kbd> / <kbd>→</kbd></dt>
-        <dd>Previous / next page</dd>
+        <dd>Previous / next page (swipe on touch devices)</dd>
         <dt><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dt>
         <dd>Scroll the page</dd>
       </dl>
@@ -448,7 +448,10 @@ def render_library(
     else:
         stats = f"No matches · {_format_count(library_total)} in library"
 
-    pagination_script = f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
+    pagination_script = (
+        f'\n    <script src="{esc(static_asset("library.js"))}"></script>'
+        f'\n    <script src="{esc(static_asset("swipe-nav.js"))}"></script>'
+    )
 
     clear_url = esc(
         cgi_script("index.py")
@@ -630,7 +633,10 @@ def render_book_detail(
         if next_url:
             attrs.append(f'data-book-next-url="{esc(next_url)}"')
         body_attrs = " " + " ".join(attrs)
-        scripts = f'    <script src="{esc(static_asset("detail.js"))}"></script>\n'
+        scripts = (
+            f'    <script src="{esc(static_asset("detail.js"))}"></script>\n'
+            f'    <script src="{esc(static_asset("swipe-nav.js"))}"></script>\n'
+        )
     browse_hidden = browse_context_hidden_inputs(
         ctx,
         prev_book_id=prev_book_id,
