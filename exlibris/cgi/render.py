@@ -11,6 +11,7 @@ from exlibris.cgi.common import (
     LibraryBrowseContext,
     UserRow,
     book_detail_href,
+    browse_context_hidden_inputs,
     cgi_script,
     cover_cache_version,
     cover_href,
@@ -702,8 +703,14 @@ def render_book_detail(
 """
 
     if user_is_admin:
+        browse_hidden = browse_context_hidden_inputs(
+            ctx,
+            prev_book_id=prev_book_id,
+            next_book_id=next_book_id,
+        )
         title_author_block = f"""            <form class="book-edit-form" method="post" action="{esc(edit_book_action())}">
               <input type="hidden" name="id" value="{book.id}">
+              {browse_hidden}
               <div class="book-edit-form__fields">
                 <label class="book-edit-form__label">
                   <span class="book-edit-form__name">Title</span>

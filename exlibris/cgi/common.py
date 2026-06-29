@@ -417,6 +417,73 @@ def book_detail_href(book_id: int, ctx: LibraryBrowseContext) -> str:
     return f"{cgi_script('book.py')}?{query}"
 
 
+LIB_BROWSE_PREFIX = "lib_"
+
+
+def _form_field(form, name: str, *, prefix: str = "", default: str = "") -> str:
+    value = form.getfirst(f"{prefix}{name}", default)
+    return value if value is not None else default
+
+
+def parse_library_browse_context_from_form(
+    form,
+    *,
+    current_user: UserRow | None = None,
+    prefix: str = "",
+) -> LibraryBrowseContext:
+    favorites_only = (
+        _form_field(form, "favorites", prefix=prefix) == "1"
+        and current_user is not None
+    )
+    return parse_library_browse_context(
+        title=_form_field(form, "title", prefix=prefix),
+        author=_form_field(form, "author", prefix=prefix),
+        publisher=_form_field(form, "publisher", prefix=prefix),
+        genre=_form_field(form, "genre", prefix=prefix),
+        language=_form_field(form, "language", prefix=prefix),
+        sort=_form_field(form, "sort", prefix=prefix, default="title") or "title",
+        sort_dir=_form_field(form, "sort_dir", prefix=prefix),
+        page_size=_form_field(form, "page_size", prefix=prefix),
+        page=_form_field(form, "page", prefix=prefix, default="1") or "1",
+        favorites_only=favorites_only,
+    )
+
+
+def parse_stored_neighbor_ids(
+    form,
+    *,
+    prefix: str = LIB_BROWSE_PREFIX,
+) -> tuple[int | None, int | None]:
+    """Neighbor ids captured before an edit (pre-sort-position navigation)."""
+    prev_raw = _form_field(form, "prev_id", prefix=prefix)
+    next_raw = _form_field(form, "next_id", prefix=prefix)
+    prev_id = int(prev_raw) if prev_raw.isdigit() else None
+    next_id = int(next_raw) if next_raw.isdigit() else None
+    return prev_id, next_id
+
+
+def browse_context_hidden_inputs(
+    ctx: LibraryBrowseContext,
+    *,
+    prev_book_id: int | None = None,
+    next_book_id: int | None = None,
+    prefix: str = LIB_BROWSE_PREFIX,
+) -> str:
+    """Hidden fields for POST round-trips (lib_ prefix avoids clashing with edit fields)."""
+    lines: list[str] = []
+    if prev_book_id is not None:
+        lines.append(f'<input type="hidden" name="{prefix}prev_id" value="{prev_book_id}">')
+    if next_book_id is not None:
+        lines.append(f'<input type="hidden" name="{prefix}next_id" value="{next_book_id}">')
+    for key, value in ctx.normalized().query_params().items():
+        if key == "id":
+            continue
+        lines.append(
+            f'<input type="hidden" name="{prefix}{key}" value="{esc(value)}">'
+        )
+    return "\n".join(lines)
+
+
 def library_index_href(ctx: LibraryBrowseContext) -> str:
     params = ctx.normalized().query_params()
     query = urlencode(params)
