@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from exlibris.admins import is_admin_username
 from exlibris.auth import (
@@ -324,6 +324,103 @@ def normalize_sort_dir(sort: str, sort_dir: str | None) -> str:
     if sort_dir in ("asc", "desc"):
         return sort_dir
     return DEFAULT_SORT_DIR.get(sort, "asc")
+
+
+@dataclass(frozen=True)
+class LibraryBrowseContext:
+    """Library filters/sort carried on book detail links for prev/next navigation."""
+
+    title: str = ""
+    author: str = ""
+    publisher: str = ""
+    genre: str = ""
+    language: str = ""
+    sort: str = "title"
+    sort_dir: str = ""
+    page_size: int | str = ""
+    page: int = 1
+    favorites_only: bool = False
+
+    def normalized(self) -> LibraryBrowseContext:
+        return LibraryBrowseContext(
+            title=self.title,
+            author=self.author,
+            publisher=self.publisher,
+            genre=self.genre,
+            language=self.language,
+            sort=self.sort or "title",
+            sort_dir=normalize_sort_dir(self.sort or "title", self.sort_dir or None),
+            page_size=normalize_page_size(self.page_size),
+            page=max(1, self.page),
+            favorites_only=self.favorites_only,
+        )
+
+    def query_params(self, *, book_id: int | None = None) -> dict[str, str]:
+        ctx = self.normalized()
+        params: dict[str, str] = {}
+        if book_id is not None:
+            params["id"] = str(book_id)
+        if ctx.title:
+            params["title"] = ctx.title
+        if ctx.author:
+            params["author"] = ctx.author
+        if ctx.publisher:
+            params["publisher"] = ctx.publisher
+        if ctx.genre:
+            params["genre"] = ctx.genre
+        if ctx.language:
+            params["language"] = ctx.language
+        if ctx.favorites_only:
+            params["favorites"] = "1"
+        if ctx.sort != "title":
+            params["sort"] = ctx.sort
+        if ctx.sort_dir != DEFAULT_SORT_DIR.get(ctx.sort, "asc"):
+            params["sort_dir"] = ctx.sort_dir
+        if ctx.page_size != DEFAULT_PAGE_SIZE:
+            params["page_size"] = str(ctx.page_size)
+        if ctx.page > 1:
+            params["page"] = str(ctx.page)
+        return params
+
+
+def parse_library_browse_context(
+    *,
+    title: str = "",
+    author: str = "",
+    publisher: str = "",
+    genre: str = "",
+    language: str = "",
+    sort: str = "title",
+    sort_dir: str = "",
+    page_size: str | int = "",
+    page: str | int = "1",
+    favorites_only: bool = False,
+) -> LibraryBrowseContext:
+    raw_page = str(page).strip() if page is not None else "1"
+    parsed_page = int(raw_page) if raw_page.isdigit() else 1
+    return LibraryBrowseContext(
+        title=title or "",
+        author=author or "",
+        publisher=publisher or "",
+        genre=genre or "",
+        language=language or "",
+        sort=sort or "title",
+        sort_dir=sort_dir or "",
+        page_size=page_size or DEFAULT_PAGE_SIZE,
+        page=parsed_page,
+        favorites_only=favorites_only,
+    )
+
+
+def book_detail_href(book_id: int, ctx: LibraryBrowseContext) -> str:
+    query = urlencode(ctx.query_params(book_id=book_id))
+    return f"{cgi_script('book.py')}?{query}"
+
+
+def library_index_href(ctx: LibraryBrowseContext) -> str:
+    params = ctx.normalized().query_params()
+    query = urlencode(params)
+    return f"{cgi_script('index.py')}?{query}" if query else cgi_script("index.py")
 
 
 def sort_order_by(sort: str, sort_dir: str) -> str:
@@ -680,6 +777,60 @@ def list_books(
     rows = conn.execute(select_sql, select_params).fetchall()
 
     return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
+
+
+def neighbor_book_ids(
+    conn: sqlite3.Connection,
+    book_id: int,
+    ctx: LibraryBrowseContext,
+    *,
+    user_id: int | None = None,
+) -> tuple[int | None, int | None]:
+    """Previous and next book ids in the current filtered/sorted library view."""
+    ctx = ctx.normalized()
+    if ctx.sort == "random":
+        return None, None
+
+    fts_match, where, params, order_by = _book_filter_clause(
+        title=ctx.title,
+        author=ctx.author,
+        publisher=ctx.publisher,
+        genre=ctx.genre,
+        language=ctx.language,
+        sort=ctx.sort,
+        sort_dir=ctx.sort_dir,
+        favorites_only=ctx.favorites_only,
+        user_id=user_id,
+    )
+    where_sql = " AND ".join(where)
+    if fts_match:
+        from_sql = (
+            "FROM books INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql}"
+        )
+        query_params: list[object] = [fts_match, *params, book_id]
+    else:
+        from_sql = f"FROM books WHERE {where_sql}"
+        query_params = [*params, book_id]
+
+    sql = f"""
+        WITH ordered AS (
+            SELECT books.id AS id,
+                   ROW_NUMBER() OVER (ORDER BY {order_by}, books.id) AS pos
+            {from_sql}
+        )
+        SELECT prev.id, next.id
+        FROM ordered cur
+        LEFT JOIN ordered prev ON prev.pos = cur.pos - 1
+        LEFT JOIN ordered next ON next.pos = cur.pos + 1
+        WHERE cur.id = ?
+    """
+    row = conn.execute(sql, query_params).fetchone()
+    if row is None:
+        return None, None
+    prev_id = int(row[0]) if row[0] is not None else None
+    next_id = int(row[1]) if row[1] is not None else None
+    return prev_id, next_id
 
 
 def get_book(

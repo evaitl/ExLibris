@@ -8,7 +8,9 @@ from exlibris.cgi.common import (
     PAGE_SIZE_OPTIONS,
     BookRow,
     FilterOptions,
+    LibraryBrowseContext,
     UserRow,
+    book_detail_href,
     cgi_script,
     cover_cache_version,
     cover_href,
@@ -17,6 +19,7 @@ from exlibris.cgi.common import (
     edit_book_action,
     favorite_action,
     fetch_metadata_action,
+    library_index_href,
     login_action,
     logout_action,
     register_action,
@@ -46,7 +49,14 @@ def _header_auth(current_user: UserRow | None) -> str:
       </nav>"""
 
 
-def page_shell(title: str, body: str, *, current_user: UserRow | None = None) -> str:
+def page_shell(
+    title: str,
+    body: str,
+    *,
+    current_user: UserRow | None = None,
+    body_attrs: str = "",
+    scripts: str = "",
+) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,7 +65,7 @@ def page_shell(title: str, body: str, *, current_user: UserRow | None = None) ->
   <title>{esc(title)} · ExLibris</title>
   <link rel="stylesheet" href="{esc(static_href())}">
 </head>
-<body>
+<body{body_attrs}>
   <header class="site-header">
     <div class="container header-inner">
       <a class="brand" href="{esc(cgi_script('index.py'))}">ExLibris</a>
@@ -66,7 +76,7 @@ def page_shell(title: str, body: str, *, current_user: UserRow | None = None) ->
   <main class="container">
 {body}
   </main>
-</body>
+{scripts}</body>
 </html>
 """
 
@@ -351,13 +361,25 @@ def render_library(
 ) -> str:
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
+    browse_ctx = LibraryBrowseContext(
+        title=selected_title,
+        author=selected_author,
+        publisher=selected_publisher,
+        genre=selected_genre,
+        language=selected_language,
+        sort=sort,
+        sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
+        favorites_only=favorites_only,
+    )
     sort_selected = {
         key: " selected" if sort == key else ""
         for key in ("title", "author", "published", "size", "pages", "scanned", "random")
     }
 
     if books:
-        cards = "\n".join(_book_card(book) for book in books)
+        cards = "\n".join(_book_card(book, browse_ctx) for book in books)
         pagination = _pagination_nav(
             page=page,
             filtered_count=filtered_count,
@@ -554,7 +576,7 @@ def render_register(*, next_url: str = "", error: str = "", username: str = "") 
     return page_shell("Create account", body)
 
 
-def _book_card(book: BookRow) -> str:
+def _book_card(book: BookRow, browse_ctx: LibraryBrowseContext) -> str:
     title = book.title or book.file_name
     author = book.authors or "Unknown author"
     series = ""
@@ -564,8 +586,9 @@ def _book_card(book: BookRow) -> str:
 
     missing = ' book-card--missing' if book.is_missing else ""
     cover = _cover_img(book)
+    detail_href = book_detail_href(book.id, browse_ctx)
     return f"""      <li class="book-card{missing}">
-        <a class="book-card__link" href="{esc(cgi_script('book.py'))}?id={book.id}">
+        <a class="book-card__link" href="{esc(detail_href)}">
           {cover}
           <div class="book-card__body">
             <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
@@ -581,6 +604,9 @@ def _book_card(book: BookRow) -> str:
 def render_book_detail(
     book: BookRow,
     *,
+    browse_ctx: LibraryBrowseContext | None = None,
+    prev_book_id: int | None = None,
+    next_book_id: int | None = None,
     notice: str = "",
     error: str = "",
     current_user: UserRow | None = None,
@@ -590,6 +616,20 @@ def render_book_detail(
     authors_value = book.authors or ""
     genre_value = book.tags or ""
     user_is_admin = is_admin(current_user)
+    ctx = (browse_ctx or LibraryBrowseContext()).normalized()
+    back_url = library_index_href(ctx)
+    prev_url = book_detail_href(prev_book_id, ctx) if prev_book_id else ""
+    next_url = book_detail_href(next_book_id, ctx) if next_book_id else ""
+    body_attrs = ""
+    scripts = ""
+    if prev_url or next_url:
+        attrs: list[str] = []
+        if prev_url:
+            attrs.append(f'data-book-prev-url="{esc(prev_url)}"')
+        if next_url:
+            attrs.append(f'data-book-next-url="{esc(next_url)}"')
+        body_attrs = " " + " ".join(attrs)
+        scripts = f'    <script src="{esc(static_asset("detail.js"))}"></script>\n'
     series_block = ""
     if book.series:
         index = f" #{book.series_index:g}" if book.series_index is not None else ""
@@ -687,7 +727,7 @@ def render_book_detail(
             <p class="book-detail__author">{author_display}</p>
 """
 
-    body = f"""    <p class="back-link"><a href="{esc(cgi_script('index.py'))}">← Back to library</a></p>
+    body = f"""    <p class="back-link"><a href="{esc(back_url)}">← Back to library</a></p>
 {flash}
     <article class="book-detail">
       <div class="book-detail__layout">
@@ -715,7 +755,13 @@ def render_book_detail(
       </div>
     </article>
 """
-    return page_shell(title, body, current_user=current_user)
+    return page_shell(
+        title,
+        body,
+        current_user=current_user,
+        body_attrs=body_attrs,
+        scripts=scripts,
+    )
 
 
 def render_error(message: str, *, status_hint: str = "Error") -> str:
