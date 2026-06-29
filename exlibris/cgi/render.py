@@ -631,6 +631,11 @@ def render_book_detail(
             attrs.append(f'data-book-next-url="{esc(next_url)}"')
         body_attrs = " " + " ".join(attrs)
         scripts = f'    <script src="{esc(static_asset("detail.js"))}"></script>\n'
+    browse_hidden = browse_context_hidden_inputs(
+        ctx,
+        prev_book_id=prev_book_id,
+        next_book_id=next_book_id,
+    )
     series_block = ""
     if book.series:
         index = f" #{book.series_index:g}" if book.series_index is not None else ""
@@ -682,6 +687,7 @@ def render_book_detail(
     if not book.is_missing:
         restore_cover_form = f"""              <form class="book-actions__form book-actions__form--restore" method="post" action="{esc(restore_cover_action())}" onsubmit="return confirm('Restore the cover embedded in this ebook? The current cover image will be replaced.');">
                 <input type="hidden" name="id" value="{book.id}">
+                {browse_hidden}
                 <button type="submit" class="button button--restore">Restore cover from file</button>
               </form>
 """
@@ -692,6 +698,7 @@ def render_book_detail(
         favorite_form = f"""            <form class="favorite-form" method="post" action="{esc(favorite_action())}">
               <input type="hidden" name="id" value="{book.id}">
               <input type="hidden" name="favorite" value="0">
+              {browse_hidden}
               <label class="favorite-toggle">
                 <input type="checkbox" name="favorite" value="1"{checked} onchange="this.form.submit()">
                 Favorite
@@ -703,11 +710,6 @@ def render_book_detail(
 """
 
     if user_is_admin:
-        browse_hidden = browse_context_hidden_inputs(
-            ctx,
-            prev_book_id=prev_book_id,
-            next_book_id=next_book_id,
-        )
         title_author_block = f"""            <form class="book-edit-form" method="post" action="{esc(edit_book_action())}">
               <input type="hidden" name="id" value="{book.id}">
               {browse_hidden}
@@ -747,6 +749,7 @@ def render_book_detail(
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
               <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">
+                {browse_hidden}
                 <button type="submit" class="button button--fetch">Fetch metadata online</button>
               </form>
               {restore_cover_form}

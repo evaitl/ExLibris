@@ -18,13 +18,12 @@ from exlibris.cgi.common import (
     EditBookError,
     UserRow,
     book_detail_context,
+    book_detail_navigation_from_form,
     book_edit_fields,
     connect,
     connect_rw,
     get_book,
     is_admin,
-    parse_library_browse_context_from_form,
-    parse_stored_neighbor_ids,
     update_book_fields,
 )
 from exlibris.cgi.render import render_book_detail, render_error
@@ -47,18 +46,13 @@ def _detail_response(
     is_favorite: bool,
     use_stored_neighbors: bool,
 ) -> str:
-    browse_ctx = parse_library_browse_context_from_form(
-        form, current_user=current_user, prefix="lib_"
+    browse_ctx, prev_book_id, next_book_id = book_detail_navigation_from_form(
+        conn,
+        book.id,
+        form,
+        current_user=current_user,
+        use_stored_neighbors=use_stored_neighbors,
     )
-    if use_stored_neighbors:
-        prev_book_id, next_book_id = parse_stored_neighbor_ids(form)
-    else:
-        prev_book_id, next_book_id = neighbor_book_ids(
-            conn,
-            book.id,
-            browse_ctx,
-            user_id=current_user.id if current_user else None,
-        )
     return render_book_detail(
         book,
         browse_ctx=browse_ctx,

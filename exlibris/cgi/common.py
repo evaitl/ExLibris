@@ -484,6 +484,30 @@ def browse_context_hidden_inputs(
     return "\n".join(lines)
 
 
+def book_detail_navigation_from_form(
+    conn: sqlite3.Connection,
+    book_id: int,
+    form,
+    *,
+    current_user: UserRow | None,
+    use_stored_neighbors: bool = True,
+) -> tuple[LibraryBrowseContext, int | None, int | None]:
+    """Browse context and neighbors for detail pages after a POST round-trip."""
+    browse_ctx = parse_library_browse_context_from_form(
+        form, current_user=current_user, prefix=LIB_BROWSE_PREFIX
+    )
+    if use_stored_neighbors:
+        prev_book_id, next_book_id = parse_stored_neighbor_ids(form)
+    else:
+        prev_book_id, next_book_id = neighbor_book_ids(
+            conn,
+            book_id,
+            browse_ctx,
+            user_id=current_user.id if current_user else None,
+        )
+    return browse_ctx, prev_book_id, next_book_id
+
+
 def library_index_href(ctx: LibraryBrowseContext) -> str:
     params = ctx.normalized().query_params()
     query = urlencode(params)

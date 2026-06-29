@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from exlibris.cgi.common import (
+    book_detail_navigation_from_form,
     connect,
     connect_rw,
     get_book,
@@ -75,9 +76,20 @@ def main() -> None:
             return
 
         notice = "Added to favorites" if favorite else "Removed from favorites"
+        with connect() as conn:
+            browse_ctx, prev_book_id, next_book_id = book_detail_navigation_from_form(
+                conn,
+                book.id,
+                form,
+                current_user=user,
+                use_stored_neighbors=True,
+            )
         _html(
             render_book_detail(
                 book,
+                browse_ctx=browse_ctx,
+                prev_book_id=prev_book_id,
+                next_book_id=next_book_id,
                 current_user=user,
                 is_favorite=favorite,
                 notice=notice,
@@ -92,9 +104,16 @@ def main() -> None:
         if book is None:
             _html(render_error(str(exc)))
             return
+        with connect() as conn:
+            browse_ctx, prev_book_id, next_book_id = book_detail_navigation_from_form(
+                conn, book.id, form, current_user=user, use_stored_neighbors=True
+            )
         _html(
             render_book_detail(
                 book,
+                browse_ctx=browse_ctx,
+                prev_book_id=prev_book_id,
+                next_book_id=next_book_id,
                 current_user=user,
                 is_favorite=favorite,
                 error=str(exc),
@@ -113,9 +132,16 @@ def main() -> None:
         if book is None:
             _html(render_error(message))
             return
+        with connect() as conn:
+            browse_ctx, prev_book_id, next_book_id = book_detail_navigation_from_form(
+                conn, book.id, form, current_user=user, use_stored_neighbors=True
+            )
         _html(
             render_book_detail(
                 book,
+                browse_ctx=browse_ctx,
+                prev_book_id=prev_book_id,
+                next_book_id=next_book_id,
                 current_user=user,
                 is_favorite=favorite,
                 error=message,
@@ -129,9 +155,16 @@ def main() -> None:
         if book is None:
             _html(render_error("Unexpected error while updating favorites."))
             return
+        with connect() as conn:
+            browse_ctx, prev_book_id, next_book_id = book_detail_navigation_from_form(
+                conn, book.id, form, current_user=user, use_stored_neighbors=True
+            )
         _html(
             render_book_detail(
                 book,
+                browse_ctx=browse_ctx,
+                prev_book_id=prev_book_id,
+                next_book_id=next_book_id,
                 current_user=user,
                 is_favorite=favorite,
                 error="Unexpected error while updating favorites.",
