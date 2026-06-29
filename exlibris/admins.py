@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from exlibris.config import PROJECT_ROOT
-
-_ADMINS_FILE = PROJECT_ROOT / "admins.txt"
+_ADMINS_FILE = Path(__file__).resolve().parent.parent / "admins.txt"
 
 
 def admins_file_path() -> Path:
