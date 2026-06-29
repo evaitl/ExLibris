@@ -43,6 +43,7 @@ Optional: copy the example config and edit it:
 
 ```bash
 cp config.yaml.example config.yaml
+cp admins.txt.example admins.txt   # then add admin usernames
 ```
 
 ## Layout
@@ -52,6 +53,7 @@ ExLibris/
   data/            ← runtime data (gitignored)
     library.db
     covers/
+  admins.txt       ← local admin usernames (gitignored; copy from admins.txt.example)
   web/cgi-bin/     ← web UI
   exlibris/        ← Python package
 
@@ -153,12 +155,13 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
 - **Debounced search** — filters apply automatically ~1s after you stop typing
-- **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page)
+- **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page on the library; `←`/`→` move between books on detail pages)
+- **Touch navigation** — swipe left/right on library and detail pages (same as arrow keys)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages
 - Book detail pages with cover, formatted dates, file name, HTML descriptions, download
 - **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified)
-- **Fetch metadata online** and **restore cover from file** (embedded EPUB cover)
+- **Fetch metadata online** and **restore cover from file** (embedded EPUB cover) — administrators only
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
 
 ### User accounts
@@ -171,7 +174,18 @@ exlibris user create yourname
 
 Passwords are stored as scrypt hashes, never plain text.
 
-**Administrators:** list usernames in `admins.txt` (one per line) to allow editing title, author, and genre on book detail pages. The user must be logged in and registered under that username.
+**Administrators:** copy the example file and list usernames (one per line). Each name must match a registered account. Admins must be logged in to use curation actions.
+
+```bash
+cp admins.txt.example admins.txt
+# edit admins.txt — add your username(s)
+```
+
+Admin capabilities on the book detail page:
+
+- Edit title, author, and genre (database only; EPUB files unchanged)
+- Fetch metadata online
+- Restore cover from the embedded EPUB image
 
 After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
 
@@ -256,7 +270,7 @@ If the install lives under your home directory, `www-data` must be able to trave
 
 #### 5. Python environment
 
-CGI scripts use `#!/usr/bin/env python3` and add the project root to `sys.path`. Browsing the library uses only the Python standard library (plus SQLite). **Fetch metadata online** uses the same — no extra pip packages are required for the web UI.
+CGI scripts use `#!/usr/bin/env python3` and add the project root to `sys.path`. Browsing the library uses only the Python standard library (plus SQLite) — no pip packages are required for the web UI. Admin curation (fetch metadata) needs Calibre's `fetch-ebook-metadata` on `PATH` for the Apache user.
 
 The scanner CLI (`exlibris scan`) still needs the project venv:
 

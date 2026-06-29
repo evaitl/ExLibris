@@ -34,6 +34,7 @@ exlibris/
   database.py       ← init, migrations, WAL mode, upsert
   auth.py           ← scrypt passwords, signed session cookies
   users.py          ← user CRUD, favorites
+  admins.py         ← reads admins.txt for curation permissions
   ebook_meta.py     ← Calibre ebook-meta wrapper
   fetch_metadata.py ← online metadata fetch, restore embedded cover
   file_hash.py      ← SHA-1 for duplicate detection
@@ -53,14 +54,18 @@ web/
   static/
     style.css
     library.js      ← debounced search, keyboard shortcuts, sort arrows
+    detail.js       ← arrow keys on book detail pages
+    swipe-nav.js    ← touch swipe prev/next (library and detail)
 ```
+
+`admins.txt` at the project root lists administrator usernames (gitignored; copy from `admins.txt.example`). Used for metadata edit, fetch metadata, and restore cover.
 
 ### Data flow
 
-1. **Scan:** walks `/media/books` (or configured paths), SHA-1 each file, skips duplicates, calls `ebook-meta`, upserts `data/library.db`, saves covers to `data/covers/`.
-2. **Browse:** CGI scripts read the database and render HTML with server-side pagination.
+1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots.
+2. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination.
 3. **Download:** serves EPUBs only if the path is under a configured scan directory.
-4. **Fetch metadata online:** queries Calibre `fetch-ebook-metadata`, updates the database and cover images only (EPUB files unchanged).
+4. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
 
 ---
 
@@ -141,7 +146,7 @@ sudo systemctl restart apache2   # pick up new group
 
 **Word-based matching:** input split on spaces; every word must match within its filter field. FTS uses `{columns} : ("word"*)` clauses combined with `AND`. Falls back to case-insensitive `LIKE` substring search if FTS query construction fails (e.g. punctuation-only input).
 
-- Title: `title`, `sort_title`, `file_name`
+- Title: `title`, `sort_title`, `file_name` (filenames often include author names)
 - Author, publisher, genre: `authors`, `publisher`, `tags`
 
 Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
@@ -175,7 +180,8 @@ Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 | `/` | Focus title search |
 | `Esc` | Clear filters (closes help dialog first) |
 | `?` | Toggle shortcuts help |
-| `←` / `→` | Previous / next page |
+| `←` / `→` | Previous / next page (library) or book (detail) |
+| Swipe ← / → | Same as arrow keys on touch devices (`swipe-nav.js`) |
 | Page Up / Page Down | Native browser scroll |
 
 ### Debounced search
@@ -257,15 +263,27 @@ Cron example (4 AM daily):
 
 ---
 
+## Session 4 — Navigation, admins, polish (June 2026)
+
+- **`admins.txt`:** file-based admin list (`exlibris/admins.py`); gitignored with `admins.txt.example` in repo
+- **Admin curation:** edit title/author/genre; fetch metadata; restore cover (UI + server-side checks)
+- **Detail navigation:** `←`/`→` and swipe between books in current library sort/filter context
+- **POST context:** `lib_*` hidden fields preserve browse order through edit, fetch, restore, and favorite actions
+- **Pages sort:** `page_count` in sort dropdown
+- **`detail.js` / `swipe-nav.js`:** keyboard and touch navigation on detail pages
+- **CGI path:** `admins.py` resolves paths without importing `exlibris.config` (no pydantic on web UI)
+
+---
+
 ## Session 3 — Accounts, curation, FTS (June 2026)
 
 - **User accounts:** `005_users.sql`; scrypt passwords; login/logout/register CGI; `exlibris user create`
 - **Favorites:** per-user `user_favorites`; checkbox on detail page; **Favorites only** library filter (login required)
-- **Cover curation:** reject Google/Open Library placeholder images; **restore cover from file**; manual **edit title & author**
+- **Cover curation:** reject placeholder images; restore cover from file; manual metadata edit
 - **Scan:** per-file progress; skip unchanged files before Calibre; mark books missing when absent from scanned paths (metadata retained)
 - **FTS search:** `006_fts_extend.sql`; `exlibris/cgi/search.py`; library UI uses `books_fts MATCH`
 - **Toolbar:** flex layout fix; narrower language dropdown
-- **Scripts:** `scan_books.py`, `scripts/*.sh`, all shebang CGI entry points marked executable in git
+- **Scripts:** executable bits on scan entry points and CGI scripts in git
 
 ---
 
@@ -288,12 +306,13 @@ Cron example (4 AM daily):
 
 ## Known State
 
-- **UI:** CGI only; minimal JS in `library.js`
+- **UI:** CGI + `library.js`, `detail.js`, `swipe-nav.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files before Calibre; missing files hidden from browse
-- **Library browse:** paginated FTS search, favorites filter, random sort, keyboard navigation
-- **Accounts:** optional login for favorites only; web or CLI registration
-- **Curation:** edit title/author (updates sort title), fetch metadata, restore embedded cover
+- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files by size/mtime before hash/Calibre; missing files hidden from browse
+- **Library browse:** FTS search, pagination, favorites filter, random sort, keyboard and swipe navigation
+- **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)
+- **Accounts:** optional login for favorites; open web registration
+- **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
 - **Scale target:** ~600K books — FTS + pagination in place; keyset pagination still open
@@ -307,8 +326,10 @@ Cron example (4 AM daily):
 - Faceted filter counts (e.g. language with book counts)
 - Keyset pagination for deep pages
 - Favorite indicator on library grid cards
-- Optional disable open registration; protect metadata edits behind login
-- Extend manual edit to publisher, tags, series
+- Optional disable open registration
+- Narrow title search (drop `file_name` from title filter)
+- Extend admin edit to publisher and series
+- Populate `page_count` on scan from Calibre metadata
 
 ---
 

@@ -22,6 +22,7 @@ from exlibris.cgi.common import (
     connect,
     connect_rw,
     get_book,
+    is_admin,
     update_book_fields,
 )
 from exlibris.cgi.render import render_book_detail, render_error
@@ -76,6 +77,28 @@ def main() -> None:
         return
 
     book_id = int(raw_id)
+
+    with connect() as conn:
+        current_user, is_favorite = book_detail_context(conn, book_id)
+        book = get_book(conn, book_id)
+
+    if book is None:
+        _html(render_error("Book not found.", status_hint="Not found"))
+        return
+
+    if not is_admin(current_user):
+        with connect() as conn:
+            _html(
+                _detail_response(
+                    conn,
+                    book,
+                    form,
+                    error="Only administrators can fetch metadata online.",
+                    current_user=current_user,
+                    is_favorite=is_favorite,
+                )
+            )
+        return
 
     try:
         with connect_rw() as conn:

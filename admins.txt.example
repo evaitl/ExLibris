@@ -1,0 +1,4 @@
+# ExLibris administrators — one username per line.
+# Copy to admins.txt and add registered account names:
+#   cp admins.txt.example admins.txt
+# Lines starting with # are ignored.

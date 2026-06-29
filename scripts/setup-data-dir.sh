@@ -38,8 +38,11 @@ for script in "$ROOT/scan_books.py" "$ROOT"/scripts/*.sh "$ROOT"/web/cgi-bin/*.p
   fi
 done
 
-echo ""
 echo "Data directory: $DATA"
+if [[ ! -f "$ROOT/admins.txt" ]]; then
+  echo ""
+  echo "Optional: cp admins.txt.example admins.txt  # then add admin usernames"
+fi
 echo ""
 echo "For Apache (www-data), grant group write on data/ only:"
 echo "  sudo usermod -aG \"$(id -gn)\" www-data"

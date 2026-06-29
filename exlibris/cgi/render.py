@@ -690,11 +690,20 @@ def render_book_detail(
 """
 
     restore_cover_form = ""
-    if not book.is_missing:
+    if user_is_admin and not book.is_missing:
         restore_cover_form = f"""              <form class="book-actions__form book-actions__form--restore" method="post" action="{esc(restore_cover_action())}" onsubmit="return confirm('Restore the cover embedded in this ebook? The current cover image will be replaced.');">
                 <input type="hidden" name="id" value="{book.id}">
                 {browse_hidden}
                 <button type="submit" class="button button--restore">Restore cover from file</button>
+              </form>
+"""
+
+    fetch_metadata_form = ""
+    if user_is_admin:
+        fetch_metadata_form = f"""              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
+                <input type="hidden" name="id" value="{book.id}">
+                {browse_hidden}
+                <button type="submit" class="button button--fetch">Fetch metadata online</button>
               </form>
 """
 
@@ -753,12 +762,7 @@ def render_book_detail(
 {title_author_block}
 {favorite_form}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
-              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
-                <input type="hidden" name="id" value="{book.id}">
-                {browse_hidden}
-                <button type="submit" class="button button--fetch">Fetch metadata online</button>
-              </form>
-              {restore_cover_form}
+              {fetch_metadata_form}{restore_cover_form}
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
             </p>
           </header>
