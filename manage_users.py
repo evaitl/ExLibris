@@ -4,37 +4,70 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
-from exlibris.config import load_settings, resolve_database_path
-from exlibris.database import get_engine, init_db
 from exlibris.users import UserError, delete_user, list_users
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_project_path(path: Path) -> Path:
+    path = path.expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
+def _load_yaml_config(config: Path | None) -> dict:
+    path = config.expanduser() if config else PROJECT_ROOT / "config.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _database_path(args: argparse.Namespace) -> Path:
+    if args.database is not None:
+        return _resolve_project_path(args.database)
+    env = os.environ.get("EXLIBRIS_DATABASE_PATH")
+    if env:
+        return Path(env).expanduser().resolve()
+    data = _load_yaml_config(args.config)
+    if data.get("database_path"):
+        return _resolve_project_path(Path(data["database_path"]))
+    return _resolve_project_path(Path("data/library.db"))
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    engine = get_engine(db_path)
-    init_db(engine)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def _add_config_arg(parser: argparse.ArgumentParser) -> None:
+def _add_db_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--database",
+        "-d",
+        type=Path,
+        default=None,
+        help="SQLite database path (default: data/library.db or config.yaml)",
+    )
     parser.add_argument(
         "--config",
         "-c",
         type=Path,
         default=None,
-        help="Path to config.yaml (default database: data/library.db)",
+        help="Path to config.yaml",
     )
-
-
-def _database_path(args: argparse.Namespace) -> Path:
-    settings = load_settings(args.config.expanduser() if args.config else None)
-    return resolve_database_path(settings.database_path)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -102,11 +135,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help="Show all accounts")
-    _add_config_arg(list_parser)
+    _add_db_args(list_parser)
     list_parser.set_defaults(func=cmd_list)
 
     delete_parser = subparsers.add_parser("delete", help="Remove an account")
-    _add_config_arg(delete_parser)
+    _add_db_args(delete_parser)
     delete_parser.add_argument("username", help="Username to delete")
     delete_parser.add_argument(
         "--yes",
