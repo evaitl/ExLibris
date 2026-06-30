@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ExLibris">
+  <defs>
+    <style>
+      .cover-left { fill: #1a365d; }
+      .cover-right { fill: #2f6f4e; }
+      .pages { fill: #fcfdff; }
+      .spine { fill: #0f2440; }
+      .lines { stroke: #c5d0dc; stroke-width: 1.2; stroke-linecap: round; }
+      @media (prefers-color-scheme: dark) {
+        .cover-left { fill: #6ba3d6; }
+        .cover-right { fill: #7bc99a; }
+        .pages { fill: #243044; }
+        .spine { fill: #4a7aa8; }
+        .lines { stroke: #5a6472; }
+      }
+    </style>
+  </defs>
+  <path class="cover-left" d="M32 11c-9 0-18 2.2-23 4.5v35.8c5-2.1 14-3.8 23-3.8V11Z"/>
+  <path class="cover-right" d="M32 11c9 0 18 2.2 23 4.5v35.8c-5-2.1-14-3.8-23-3.8V11Z"/>
+  <path class="pages" d="M30.5 15.5c-7.5 1.2-15.5 3-19 4.2v28.8c3.5-1 11.5-2.4 19-3.4v-29.6Z"/>
+  <path class="pages" d="M33.5 15.5c7.5 1.2 15.5 3 19 4.2v28.8c-3.5-1-11.5-2.4-19-3.4v-29.6Z"/>
+  <path class="spine" d="M31 10.5h2v42.5h-2z"/>
+  <g class="lines">
+    <path d="M14 24h11"/>
+    <path d="M13 30h12"/>
+    <path d="M12.5 36h11.5"/>
+    <path d="M39 24h11"/>
+    <path d="M39 30h12"/>
+    <path d="M40 36h11.5"/>
+  </g>
+</svg>

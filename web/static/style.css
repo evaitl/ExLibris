@@ -66,11 +66,20 @@ body {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   font-size: 1.35rem;
   font-weight: 700;
   color: var(--accent);
   text-decoration: none;
   line-height: 1.2;
+}
+
+.brand__icon {
+  width: 1.65rem;
+  height: 1.65rem;
+  flex-shrink: 0;
 }
 
 .tagline {

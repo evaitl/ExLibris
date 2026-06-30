@@ -64,12 +64,16 @@ def page_shell(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{esc(title)} · ExLibris</title>
+  <link rel="icon" href="{esc(static_asset('icon.svg'))}" type="image/svg+xml">
   <link rel="stylesheet" href="{esc(static_href())}">
 </head>
 <body{body_attrs}>
   <header class="site-header">
     <div class="container header-inner">
-      <a class="brand" href="{esc(cgi_script('index.py'))}">ExLibris</a>
+      <a class="brand" href="{esc(cgi_script('index.py'))}">
+        <img class="brand__icon" src="{esc(static_asset('icon.svg'))}" alt="" width="28" height="28" decoding="async">
+        ExLibris
+      </a>
       <span class="tagline">Your personal ebook library</span>
 {_header_auth(current_user)}
     </div>
