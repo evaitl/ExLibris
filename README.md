@@ -104,7 +104,7 @@ The scanner:
 - Walks each path recursively for `.epub` files
 - Shows per-file progress (`[n/total]`) unless `--quiet`
 - Skips unchanged files when size and mtime match the database (no file read); otherwise computes SHA-1 to detect duplicates or content changes before calling Calibre
-- **Repoints** the database to a duplicate file with a longer basename when the canonical path is missing or shorter (metadata unchanged; no Calibre)
+- **Repoints** the database to a duplicate file with a longer basename when the canonical path is missing or shorter (metadata unchanged; no Calibre), and **deletes** the old shorter on-disk copy when it still exists under a scan root
 - Marks books **missing** when their file is absent from a scanned path (metadata kept; hidden from the web UI until the file reappears)
 - Reads metadata with `ebook-meta` only for new or changed files
 - Saves cover images to `data/covers/`
@@ -220,7 +220,7 @@ exlibris cleanup run --execute --backfill-hashes --prune-empty-dirs
 
 Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute` and is destructive (removes DB rows and cascades favorites).
 
-**Dedup:** unindexed files with the same SHA-1 as a database row keep the **longest basename**; shorter copies are deleted and the row is repointed.
+**Dedup:** unindexed files with the same SHA-1 as a database row keep the **longest basename**; shorter copies are deleted and the row is repointed. The scanner applies the same rule during `exlibris scan` (repoint + delete old file).
 
 **Moved files:** same SHA-1 at a new path updates only `file_path`, `file_name`, size, and mtime — Calibre is not run again (also handled during `exlibris scan` when the canonical path is missing or shorter).
 

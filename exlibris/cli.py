@@ -95,6 +95,8 @@ def scan(
         summary += f", skipped {stats.unchanged} unchanged"
     if stats.marked_missing:
         summary += f", marked {stats.marked_missing} missing"
+    if stats.files_deleted:
+        summary += f", deleted {stats.files_deleted} duplicate file(s)"
     typer.echo(f"{summary}.")
     if stats.errors:
         typer.echo(f"{len(stats.errors)} issue(s):")

@@ -8,7 +8,12 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from exlibris.book_paths import collect_book_files, path_keeper_key
+from exlibris.book_paths import (
+    collect_book_files,
+    delete_file_under_roots,
+    path_keeper_key,
+    path_is_under_any_root,
+)
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
@@ -25,6 +30,7 @@ class ScanStats:
     skipped: int = 0
     unchanged: int = 0
     marked_missing: int = 0
+    files_deleted: int = 0
     errors: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -134,6 +140,7 @@ def _try_repoint_duplicate(
     file_mtime: float,
     content_hash: str,
     existing: Book | None,
+    scan_roots: list[Path] | None = None,
 ) -> FileScanResult | None:
     """Repoint canonical row when content matches and this path should be keeper."""
     canonical = find_book_by_content_hash(session, content_hash)
@@ -143,6 +150,8 @@ def _try_repoint_duplicate(
         return None
     if not _should_repoint_canonical_to_path(canonical, file_path):
         return None
+    old_path = Path(canonical.file_path).resolve()
+    new_path = file_path.resolve()
     _repoint_book_to_file(
         canonical,
         file_path,
@@ -151,7 +160,18 @@ def _try_repoint_duplicate(
     )
     session.add(canonical)
     session.commit()
-    return FileScanResult("repointed", canonical)
+
+    files_deleted = 0
+    if (
+        scan_roots
+        and old_path != new_path
+        and old_path.is_file()
+        and path_is_under_any_root(old_path, scan_roots)
+    ):
+        delete_file_under_roots(old_path, scan_roots)
+        files_deleted = 1
+
+    return FileScanResult("repointed", canonical, files_deleted=files_deleted)
 
 
 def print_scan_progress(current: int, total: int, path: Path, status: str) -> None:
@@ -163,6 +183,7 @@ def print_scan_progress(current: int, total: int, path: Path, status: str) -> No
 class FileScanResult:
     status: str
     book: Book | None = None
+    files_deleted: int = 0
 
 
 def scan_single_file(
@@ -173,6 +194,7 @@ def scan_single_file(
     covers_dir: Path | None = None,
     now: datetime | None = None,
     verbose: bool = False,
+    scan_roots: list[Path] | None = None,
 ) -> FileScanResult:
     """Index one ebook file. Returns status: indexed, unchanged, duplicate, or error."""
     if now is None:
@@ -211,6 +233,7 @@ def scan_single_file(
                 file_mtime=stat.st_mtime,
                 content_hash=content_hash,
                 existing=existing,
+                scan_roots=scan_roots,
             )
             if repointed is not None:
                 return repointed
@@ -300,6 +323,7 @@ def scan_paths(
                 covers_dir=covers_dir,
                 now=now,
                 verbose=verbose,
+                scan_roots=scanned_roots,
             )
             if result.status == "unchanged":
                 stats.unchanged += 1
@@ -315,6 +339,7 @@ def scan_paths(
                     print(f"duplicate: {file_path.name}", flush=True)
             elif result.status == "repointed":
                 stats.added_or_updated += 1
+                stats.files_deleted += result.files_deleted
                 if on_progress:
                     on_progress(index, total, file_path, "repointed")
                 elif verbose and result.book is not None:

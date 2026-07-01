@@ -66,7 +66,7 @@ web/
 
 ### Data flow
 
-1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots; repoints canonical row when duplicate has longer basename.
+1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots; repoints canonical row when duplicate has longer basename and deletes the old shorter file under scan roots.
 2. **Cleanup:** compares scan roots to DB — dedupes by SHA-1 (longest basename), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
 3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination.
 4. **Download:** serves EPUBs only if the path is under a configured scan directory.
@@ -298,7 +298,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - **`exlibris/cleanup.py`**, **`exlibris/book_paths.py`:** reconciliation helpers; `scan_single_file()` in scanner
 - **`manage_users.py`:** list/delete accounts (stdlib path resolution)
 - **Cron:** `scan-library.sh` runs cleanup after each scan
-- **Scanner:** repoints when duplicate path wins longest-basename rule (missing or shorter canonical)
+- **Scanner:** repoints when duplicate path wins longest-basename rule (missing or shorter canonical); deletes old shorter file under scan roots
 - **Library cards:** small ★ for favorited books when signed in
 
 ---
@@ -348,7 +348,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 
 - **UI:** CGI + `library.js`, `detail.js`, `swipe-nav.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`; scanner/cleanup keep longest basename; missing files hidden from browse
+- **Dedup:** SHA-1 `content_hash`; scanner/cleanup keep longest basename and delete shorter copies; missing files hidden from browse
 - **Library browse:** FTS search, pagination, favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
 - **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)
 - **Accounts:** optional login for favorites; `manage_users.py` for server-side list/delete; open web registration

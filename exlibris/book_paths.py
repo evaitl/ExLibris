@@ -48,6 +48,24 @@ def keeper_path(candidates: list[Path]) -> Path:
     return max(candidates, key=path_keeper_key)
 
 
+def is_path_under_root(path: Path, root: Path) -> bool:
+    path = path.resolve()
+    root = root.resolve()
+    return path == root or root in path.parents
+
+
+def path_is_under_any_root(path: Path, roots: list[Path]) -> bool:
+    return any(is_path_under_root(path, root) for root in roots)
+
+
+def delete_file_under_roots(path: Path, scan_roots: list[Path]) -> None:
+    """Delete a file only when it lies under a configured scan root."""
+    path = path.resolve()
+    if not path_is_under_any_root(path, scan_roots):
+        raise OSError(f"refusing to delete outside scan roots: {path}")
+    path.unlink()
+
+
 def prune_empty_directories(
     scan_roots: list[Path],
     *,
