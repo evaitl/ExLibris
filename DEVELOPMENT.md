@@ -38,6 +38,8 @@ exlibris/
   ebook_meta.py     ← Calibre ebook-meta wrapper
   fetch_metadata.py ← online metadata fetch, restore embedded cover
   file_hash.py      ← SHA-1 for duplicate detection
+  book_paths.py     ← EPUB file walk (stdlib; shared by scanner and cleanup)
+  cleanup.py        ← library file/DB reconciliation helpers
   scanner.py        ← directory walk, per-book commit, dedup by hash
   cgi/
     common.py       ← queries, FTS-backed list_books, auth, favorites
@@ -260,6 +262,13 @@ Cron example (4 AM daily):
 ```cron
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
+
+---
+
+## Session 5 — Library cleanup (June 2026)
+
+- **`cleanup_library.py`:** audit file tree vs DB; dedupe by SHA-1 (longest basename wins); index new EPUBs; `--force-clean` hard-deletes absent rows
+- **`exlibris/cleanup.py`:** audit, dedupe, purge helpers; `scan_single_file()` extracted from scanner for one-file indexing
 
 ---
 

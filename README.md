@@ -195,6 +195,23 @@ exlibris scan
 
 Incremental scans are quick when nothing changed.
 
+### Library cleanup
+
+`cleanup_library.py` reconciles the file tree with the database: deduplicates on-disk copies (keeps the longest filename), indexes new EPUBs, and optionally removes stale database rows.
+
+```bash
+./cleanup_library.py audit                         # read-only report
+./cleanup_library.py run                           # dry-run: show planned changes
+./cleanup_library.py run --execute                 # dedupe files and index new EPUBs
+./cleanup_library.py run --execute --force-clean   # also hard-delete rows with no file on disk
+```
+
+Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute`.
+
+Moved files (same SHA-1 as an existing row) are **repointed** in the database — only `file_path`, `file_name`, size, and mtime are updated; Calibre metadata extraction is not run again.
+
+Manage accounts with `./manage_users.py list` and `./manage_users.py delete USERNAME`.
+
 ### CGI environment variables
 
 | Variable | Purpose |

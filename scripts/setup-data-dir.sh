@@ -32,7 +32,7 @@ if [[ -d "$ROOT/covers" ]]; then
   fi
 fi
 
-for script in "$ROOT/scan_books.py" "$ROOT/manage_users.py" "$ROOT"/scripts/*.sh "$ROOT"/web/cgi-bin/*.py; do
+for script in "$ROOT/scan_books.py" "$ROOT/manage_users.py" "$ROOT/cleanup_library.py" "$ROOT"/scripts/*.sh "$ROOT"/web/cgi-bin/*.py; do
   if [[ -f "$script" ]] && head -1 "$script" | grep -q '^#!'; then
     chmod +x "$script"
   fi

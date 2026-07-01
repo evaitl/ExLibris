@@ -8,13 +8,12 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from exlibris.book_paths import collect_book_files, iter_book_files
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
 from exlibris.file_hash import sha1_file
 from exlibris.models import Book
-
-SUPPORTED_EXTENSIONS = {".epub"}
 
 ScanProgressCallback = Callable[[int, int, Path, str], None]
 
@@ -33,33 +32,10 @@ class ScanStats:
             self.errors = []
 
 
-def iter_book_files(root: Path):
-    if not root.exists():
-        return
-    if root.is_file():
-        if root.suffix.lower() in SUPPORTED_EXTENSIONS:
-            yield root.resolve()
-        return
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            yield path.resolve()
-
-
-def collect_book_files(
+def collect_book_files_from_config(
     paths: list[Path],
 ) -> tuple[list[Path], list[Path], list[str]]:
-    """Gather ebook paths from scan roots. Returns (files, scanned_roots, errors)."""
-    files: list[Path] = []
-    scanned_roots: list[Path] = []
-    errors: list[str] = []
-    for root in paths:
-        root = resolve_scan_path(root)
-        if not root.exists():
-            errors.append(f"path not found: {root}")
-            continue
-        scanned_roots.append(root)
-        files.extend(iter_book_files(root))
-    return files, scanned_roots, errors
+    return collect_book_files(paths, resolve_path=resolve_scan_path)
 
 
 def _books_under_root(root: Path):
@@ -128,9 +104,162 @@ def _unchanged_by_stat(existing: Book, *, file_size: int, file_mtime: float) -> 
     )
 
 
+def _repoint_book_to_file(
+    book: Book,
+    file_path: Path,
+    *,
+    file_size: int,
+    file_mtime: float,
+) -> None:
+    """Update file identity fields only; bibliographic metadata is unchanged."""
+    book.file_path = str(file_path)
+    book.file_name = file_path.name
+    book.file_size = file_size
+    book.file_mtime = file_mtime
+    book.is_missing = False
+
+
+def _try_repoint_duplicate(
+    session: Session,
+    *,
+    file_path: Path,
+    file_size: int,
+    file_mtime: float,
+    content_hash: str,
+    existing: Book | None,
+) -> FileScanResult | None:
+    """Repoint a missing canonical row when the same content appears at a new path."""
+    canonical = find_book_by_content_hash(session, content_hash)
+    if canonical is None:
+        return None
+    if existing is not None and canonical.id == existing.id:
+        return None
+    old_path = Path(canonical.file_path)
+    if old_path.is_file() and not canonical.is_missing:
+        return None
+    _repoint_book_to_file(
+        canonical,
+        file_path,
+        file_size=file_size,
+        file_mtime=file_mtime,
+    )
+    session.add(canonical)
+    session.commit()
+    return FileScanResult("repointed", canonical)
+
+
 def print_scan_progress(current: int, total: int, path: Path, status: str) -> None:
     width = len(str(total))
     print(f"[{current:>{width}}/{total}] {status}: {path.name}", flush=True)
+
+
+@dataclass
+class FileScanResult:
+    status: str
+    book: Book | None = None
+
+
+def scan_single_file(
+    session: Session,
+    file_path: Path,
+    *,
+    ebook_meta_cmd: str | None = None,
+    covers_dir: Path | None = None,
+    now: datetime | None = None,
+    verbose: bool = False,
+) -> FileScanResult:
+    """Index one ebook file. Returns status: indexed, unchanged, duplicate, or error."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    covers_root = resolve_covers_dir(covers_dir)
+    file_path = file_path.resolve()
+
+    try:
+        stat = file_path.stat()
+        file_path_str = str(file_path)
+
+        existing = session.scalar(
+            select(Book).where(Book.file_path == file_path_str)
+        )
+        if _mark_file_present(session, existing):
+            session.commit()
+
+        if existing is not None and _unchanged_by_stat(
+            existing,
+            file_size=stat.st_size,
+            file_mtime=stat.st_mtime,
+        ):
+            return FileScanResult("unchanged", existing)
+
+        content_hash = sha1_file(file_path)
+        skip_reason = _skip_reason_before_calibre(
+            session,
+            existing=existing,
+            content_hash=content_hash,
+        )
+        if skip_reason == "duplicate":
+            repointed = _try_repoint_duplicate(
+                session,
+                file_path=file_path,
+                file_size=stat.st_size,
+                file_mtime=stat.st_mtime,
+                content_hash=content_hash,
+                existing=existing,
+            )
+            if repointed is not None:
+                return repointed
+            return FileScanResult("duplicate", existing)
+
+        if skip_reason == "unchanged":
+            return FileScanResult("unchanged", existing)
+
+        meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
+        if meta.errors and verbose:
+            for err in meta.errors:
+                print(f"{file_path}: {err}", flush=True)
+
+        book = upsert_book(
+            session,
+            {
+                "file_path": file_path_str,
+                "file_name": file_path.name,
+                "format": meta.format or file_path.suffix.lower().lstrip("."),
+                "file_size": stat.st_size,
+                "file_mtime": stat.st_mtime,
+                "content_hash": content_hash,
+                "title": meta.title or file_path.stem,
+                "sort_title": meta.sort_title,
+                "authors": meta.authors,
+                "publisher": meta.publisher,
+                "published_date": meta.published_date,
+                "isbn": meta.isbn,
+                "language": meta.language,
+                "description": meta.description,
+                "series": meta.series,
+                "series_index": meta.series_index,
+                "tags": meta.tags,
+                "last_scanned_at": now,
+            },
+        )
+        session.flush()
+
+        cover_file = extract_cover(
+            file_path,
+            covers_root / str(book.id),
+            ebook_meta_cmd=ebook_meta_cmd,
+        )
+        if cover_file:
+            book.cover_path = str(cover_file.relative_to(PROJECT_ROOT))
+            session.add(book)
+
+        session.commit()
+        return FileScanResult("indexed", book)
+    except EbookMetaError:
+        session.rollback()
+        raise
+    except Exception:
+        session.rollback()
+        raise
 
 
 def scan_paths(
@@ -144,9 +273,8 @@ def scan_paths(
 ) -> ScanStats:
     stats = ScanStats()
     now = datetime.now(timezone.utc)
-    covers_root = resolve_covers_dir(covers_dir)
 
-    book_files, scanned_roots, path_errors = collect_book_files(paths)
+    book_files, scanned_roots, path_errors = collect_book_files_from_config(paths)
     stats.errors.extend(path_errors)
     total = len(book_files)
     seen_paths: set[str] = set()
@@ -156,108 +284,48 @@ def scan_paths(
 
     for index, file_path in enumerate(book_files, start=1):
         stats.scanned += 1
+        file_path_str = str(file_path.resolve())
+        seen_paths.add(file_path_str)
         try:
-            stat = file_path.stat()
-            file_path_str = str(file_path)
-            seen_paths.add(file_path_str)
-
-            existing = session.scalar(
-                select(Book).where(Book.file_path == file_path_str)
+            result = scan_single_file(
+                session,
+                file_path,
+                ebook_meta_cmd=ebook_meta_cmd,
+                covers_dir=covers_dir,
+                now=now,
+                verbose=verbose,
             )
-            if _mark_file_present(session, existing):
-                session.commit()
-
-            if existing is not None and _unchanged_by_stat(
-                existing,
-                file_size=stat.st_size,
-                file_mtime=stat.st_mtime,
-            ):
+            if result.status == "unchanged":
                 stats.unchanged += 1
                 if on_progress:
                     on_progress(index, total, file_path, "unchanged")
                 elif verbose:
                     print(f"unchanged: {file_path.name}", flush=True)
-                continue
-
-            content_hash = sha1_file(file_path)
-            skip_reason = _skip_reason_before_calibre(
-                session,
-                existing=existing,
-                content_hash=content_hash,
-            )
-            if skip_reason == "duplicate":
+            elif result.status == "duplicate":
                 stats.skipped += 1
                 if on_progress:
                     on_progress(index, total, file_path, "duplicate")
                 elif verbose:
-                    canonical = find_book_by_content_hash(session, content_hash)
-                    print(
-                        f"duplicate: {file_path.name} "
-                        f"(same as {canonical.file_path if canonical else 'unknown'})",
-                        flush=True,
-                    )
-                continue
-
-            if skip_reason == "unchanged":
-                stats.unchanged += 1
+                    print(f"duplicate: {file_path.name}", flush=True)
+            elif result.status == "repointed":
+                stats.added_or_updated += 1
                 if on_progress:
-                    on_progress(index, total, file_path, "unchanged")
-                elif verbose:
-                    print(f"unchanged: {file_path.name}", flush=True)
-                continue
-
-            meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
-            if meta.errors and verbose:
-                stats.errors.extend(f"{file_path}: {err}" for err in meta.errors)
-
-            book = upsert_book(
-                session,
-                {
-                    "file_path": file_path_str,
-                    "file_name": file_path.name,
-                    "format": meta.format or file_path.suffix.lower().lstrip("."),
-                    "file_size": stat.st_size,
-                    "file_mtime": stat.st_mtime,
-                    "content_hash": content_hash,
-                    "title": meta.title or file_path.stem,
-                    "sort_title": meta.sort_title,
-                    "authors": meta.authors,
-                    "publisher": meta.publisher,
-                    "published_date": meta.published_date,
-                    "isbn": meta.isbn,
-                    "language": meta.language,
-                    "description": meta.description,
-                    "series": meta.series,
-                    "series_index": meta.series_index,
-                    "tags": meta.tags,
-                    "last_scanned_at": now,
-                },
-            )
-            session.flush()
-
-            cover_file = extract_cover(
-                file_path,
-                covers_root / str(book.id),
-                ebook_meta_cmd=ebook_meta_cmd,
-            )
-            if cover_file:
-                book.cover_path = str(cover_file.relative_to(PROJECT_ROOT))
-                session.add(book)
-
-            session.commit()
-            stats.added_or_updated += 1
-            if on_progress:
-                on_progress(index, total, file_path, "indexed")
-            elif verbose:
-                title = book.title or book.file_name
-                print(f"indexed: {title}", flush=True)
+                    on_progress(index, total, file_path, "repointed")
+                elif verbose and result.book is not None:
+                    title = result.book.title or result.book.file_name
+                    print(f"repointed: {title} -> {file_path.name}", flush=True)
+            elif result.status == "indexed":
+                stats.added_or_updated += 1
+                if on_progress:
+                    on_progress(index, total, file_path, "indexed")
+                elif verbose and result.book is not None:
+                    title = result.book.title or result.book.file_name
+                    print(f"indexed: {title}", flush=True)
         except EbookMetaError as exc:
-            session.rollback()
             stats.errors.append(f"{file_path}: {exc}")
             if on_progress:
                 on_progress(index, total, file_path, "error")
         except Exception as exc:
-            session.rollback()
             stats.errors.append(f"{file_path}: {exc}")
             if on_progress:
                 on_progress(index, total, file_path, "error")
