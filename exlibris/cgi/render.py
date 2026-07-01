@@ -363,6 +363,7 @@ def render_library(
     page_size: int,
     favorites_only: bool = False,
     current_user: UserRow | None = None,
+    favorite_book_ids: frozenset[int] | None = None,
 ) -> str:
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
@@ -384,7 +385,11 @@ def render_library(
     }
 
     if books:
-        cards = "\n".join(_book_card(book, browse_ctx) for book in books)
+        fav_ids = favorite_book_ids or frozenset()
+        cards = "\n".join(
+            _book_card(book, browse_ctx, is_favorite=book.id in fav_ids)
+            for book in books
+        )
         pagination = _pagination_nav(
             page=page,
             filtered_count=filtered_count,
@@ -584,7 +589,12 @@ def render_register(*, next_url: str = "", error: str = "", username: str = "") 
     return page_shell("Create account", body)
 
 
-def _book_card(book: BookRow, browse_ctx: LibraryBrowseContext) -> str:
+def _book_card(
+    book: BookRow,
+    browse_ctx: LibraryBrowseContext,
+    *,
+    is_favorite: bool = False,
+) -> str:
     title = book.title or book.file_name
     author = book.authors or "Unknown author"
     series = ""
@@ -595,11 +605,16 @@ def _book_card(book: BookRow, browse_ctx: LibraryBrowseContext) -> str:
     missing = ' book-card--missing' if book.is_missing else ""
     cover = _cover_img(book)
     detail_href = book_detail_href(book.id, browse_ctx)
+    favorite_star = ""
+    if is_favorite:
+        favorite_star = (
+            '<span class="book-card__favorite" aria-label="Favorite" title="Favorite">★</span>'
+        )
     return f"""      <li class="book-card{missing}">
         <a class="book-card__link" href="{esc(detail_href)}">
           {cover}
           <div class="book-card__body">
-            <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
+            {favorite_star}<span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
             <h2 class="book-card__title">{esc(title)}</h2>
             <p class="book-card__author">{esc(author)}</p>
             {series}

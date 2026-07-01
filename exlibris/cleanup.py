@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from exlibris.book_paths import collect_book_files
+from exlibris.book_paths import collect_book_files, keeper_path, prune_empty_directories
 from exlibris.file_hash import sha1_file
 
 
@@ -46,14 +46,9 @@ class CleanupResult:
     rows_indexed: int = 0
     rows_purged: int = 0
     covers_removed: int = 0
+    hashes_backfilled: int = 0
+    dirs_pruned: int = 0
     errors: list[str] = field(default_factory=list)
-
-
-def keeper_path(candidates: list[Path]) -> Path:
-    """Prefer the path with the longest basename, then longest full path."""
-    if not candidates:
-        raise ValueError("keeper_path requires at least one candidate")
-    return max(candidates, key=lambda path: (len(path.name), len(str(path)), str(path)))
 
 
 def is_path_under_root(path: Path, root: Path) -> bool:
@@ -269,3 +264,41 @@ def apply_duplicate_group(
             files_deleted += 1
 
     return rows_updated, files_deleted, repointed_book_id
+
+
+def backfill_content_hashes(
+    conn: sqlite3.Connection,
+    *,
+    execute: bool,
+) -> tuple[int, list[str]]:
+    """Compute SHA-1 for rows with NULL content_hash when the file exists."""
+    errors: list[str] = []
+    updated = 0
+    for book in load_books(conn):
+        if book.content_hash is not None:
+            continue
+        path = Path(book.file_path)
+        if not path.is_file():
+            continue
+        try:
+            content_hash = sha1_file(path)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        conflict = conn.execute(
+            "SELECT id FROM books WHERE content_hash = ? AND id != ?",
+            (content_hash, book.id),
+        ).fetchone()
+        if conflict is not None:
+            errors.append(
+                f"id={book.id}: same hash as existing row id={int(conflict['id'])}"
+            )
+            continue
+        if execute:
+            conn.execute(
+                "UPDATE books SET content_hash = ? WHERE id = ?",
+                (content_hash, book.id),
+            )
+            conn.commit()
+        updated += 1
+    return updated, errors

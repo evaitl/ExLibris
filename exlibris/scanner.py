@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from exlibris.book_paths import collect_book_files, iter_book_files
+from exlibris.book_paths import collect_book_files, path_keeper_key
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
@@ -119,6 +119,13 @@ def _repoint_book_to_file(
     book.is_missing = False
 
 
+def _should_repoint_canonical_to_path(canonical: Book, file_path: Path) -> bool:
+    old_path = Path(canonical.file_path)
+    if not old_path.is_file() or canonical.is_missing:
+        return True
+    return path_keeper_key(file_path) > path_keeper_key(old_path)
+
+
 def _try_repoint_duplicate(
     session: Session,
     *,
@@ -128,14 +135,13 @@ def _try_repoint_duplicate(
     content_hash: str,
     existing: Book | None,
 ) -> FileScanResult | None:
-    """Repoint a missing canonical row when the same content appears at a new path."""
+    """Repoint canonical row when content matches and this path should be keeper."""
     canonical = find_book_by_content_hash(session, content_hash)
     if canonical is None:
         return None
     if existing is not None and canonical.id == existing.id:
         return None
-    old_path = Path(canonical.file_path)
-    if old_path.is_file() and not canonical.is_missing:
+    if not _should_repoint_canonical_to_path(canonical, file_path):
         return None
     _repoint_book_to_file(
         canonical,

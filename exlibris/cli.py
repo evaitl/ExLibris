@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import importlib.util
 from pathlib import Path
 
 import typer
@@ -7,13 +10,46 @@ from exlibris.database import get_engine, init_db
 from exlibris.scanner import print_scan_progress, scan_paths
 from exlibris.users import UserError, register_user
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 app = typer.Typer(
     no_args_is_help=True,
     help="ExLibris — scan ebook directories and browse your library.",
 )
 
 user_app = typer.Typer(no_args_is_help=True, help="Manage library user accounts.")
+cleanup_app = typer.Typer(no_args_is_help=True, help="Reconcile files with the database.")
 app.add_typer(user_app, name="user")
+app.add_typer(cleanup_app, name="cleanup")
+
+
+def _cleanup_argv(command: str, **flags: object) -> list[str]:
+    argv = [command]
+    for key, value in flags.items():
+        if value is None or value is False:
+            continue
+        if value is True:
+            argv.append(f"--{key.replace('_', '-')}")
+            continue
+        if isinstance(value, list):
+            for item in value:
+                argv.extend([f"--{key.replace('_', '-')}", str(item)])
+            continue
+        argv.extend([f"--{key.replace('_', '-')}", str(value)])
+    return argv
+
+
+def _run_cleanup(command: str, **flags: object) -> None:
+    script = PROJECT_ROOT / "cleanup_library.py"
+    spec = importlib.util.spec_from_file_location("cleanup_library", script)
+    if spec is None or spec.loader is None:
+        typer.echo(f"cleanup script not found: {script}", err=True)
+        raise typer.Exit(code=1)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    argv = _cleanup_argv(command, **flags)
+    code = module.main(argv)
+    raise typer.Exit(code=code)
 
 
 @app.command()
@@ -64,6 +100,54 @@ def scan(
         typer.echo(f"{len(stats.errors)} issue(s):")
         for err in stats.errors:
             typer.echo(f"  - {err}")
+
+
+@cleanup_app.command("audit")
+def cleanup_audit(
+    config: Path | None = typer.Option(None, "--config", "-c"),
+    database: Path | None = typer.Option(None, "--database", "-d"),
+    path: list[Path] | None = typer.Option(None, "--path", "-p"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    force_clean: bool = typer.Option(False, "--force-clean"),
+) -> None:
+    """Report unindexed, duplicate, absent, and orphan items."""
+    _run_cleanup(
+        "audit",
+        config=config,
+        database=database,
+        path=path,
+        quiet=quiet,
+        verbose=verbose,
+        force_clean=force_clean,
+    )
+
+
+@cleanup_app.command("run")
+def cleanup_run(
+    config: Path | None = typer.Option(None, "--config", "-c"),
+    database: Path | None = typer.Option(None, "--database", "-d"),
+    path: list[Path] | None = typer.Option(None, "--path", "-p"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    execute: bool = typer.Option(False, "--execute"),
+    force_clean: bool = typer.Option(False, "--force-clean"),
+    backfill_hashes: bool = typer.Option(False, "--backfill-hashes"),
+    prune_empty_dirs: bool = typer.Option(False, "--prune-empty-dirs"),
+) -> None:
+    """Deduplicate files, index new EPUBs, optionally purge absent rows."""
+    _run_cleanup(
+        "run",
+        config=config,
+        database=database,
+        path=path,
+        quiet=quiet,
+        verbose=verbose,
+        execute=execute,
+        force_clean=force_clean,
+        backfill_hashes=backfill_hashes,
+        prune_empty_dirs=prune_empty_dirs,
+    )
 
 
 @user_app.command("create")

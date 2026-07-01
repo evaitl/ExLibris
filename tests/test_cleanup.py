@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from exlibris.cleanup import build_duplicate_groups, keeper_path
+from exlibris.book_paths import keeper_path
+from exlibris.cleanup import build_duplicate_groups
 
 
 def test_keeper_path_prefers_longest_basename() -> None:

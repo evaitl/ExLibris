@@ -642,6 +642,14 @@ def is_favorite(conn: sqlite3.Connection, *, user_id: int, book_id: int) -> bool
     return row is not None
 
 
+def favorite_book_ids(conn: sqlite3.Connection, user_id: int) -> frozenset[int]:
+    rows = conn.execute(
+        "SELECT book_id FROM user_favorites WHERE user_id = ?",
+        (user_id,),
+    ).fetchall()
+    return frozenset(int(row["book_id"]) for row in rows)
+
+
 def set_favorite(
     conn: sqlite3.Connection,
     *,

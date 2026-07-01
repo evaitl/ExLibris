@@ -34,3 +34,43 @@ def collect_book_files(
         scanned_roots.append(root)
         files.extend(iter_book_files(root))
     return files, scanned_roots, errors
+
+
+def path_keeper_key(path: Path) -> tuple[int, int, str]:
+    resolved = path.resolve()
+    return (len(resolved.name), len(str(resolved)), str(resolved))
+
+
+def keeper_path(candidates: list[Path]) -> Path:
+    """Prefer the path with the longest basename, then longest full path."""
+    if not candidates:
+        raise ValueError("keeper_path requires at least one candidate")
+    return max(candidates, key=path_keeper_key)
+
+
+def prune_empty_directories(
+    scan_roots: list[Path],
+    *,
+    execute: bool,
+) -> int:
+    """Remove empty directories under scan roots (bottom-up). Never removes roots."""
+    removed = 0
+    for root in scan_roots:
+        root = root.resolve()
+        if not root.is_dir():
+            continue
+        directories = [
+            path
+            for path in root.rglob("*")
+            if path.is_dir() and path.resolve() != root
+        ]
+        for dirpath in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+            try:
+                if any(dirpath.iterdir()):
+                    continue
+                if execute:
+                    dirpath.rmdir()
+                removed += 1
+            except OSError:
+                continue
+    return removed

@@ -267,8 +267,10 @@ Cron example (4 AM daily):
 
 ## Session 5 — Library cleanup (June 2026)
 
-- **`cleanup_library.py`:** audit file tree vs DB; dedupe by SHA-1 (longest basename wins); index new EPUBs; `--force-clean` hard-deletes absent rows
-- **`exlibris/cleanup.py`:** audit, dedupe, purge helpers; `scan_single_file()` extracted from scanner for one-file indexing
+- **`cleanup_library.py`:** audit file tree vs DB; dedupe by SHA-1 (longest basename wins); index new EPUBs; `--force-clean` hard-deletes absent rows; `--backfill-hashes`; `--prune-empty-dirs`
+- **`exlibris cleanup`:** typer wrapper for audit/run; cron scan script runs cleanup after scan
+- **Scanner:** repoints canonical row when duplicate path has longer basename (no Calibre)
+- **Library cards:** small star for favorited books when signed in
 
 ---
 
@@ -335,7 +337,6 @@ Cron example (4 AM daily):
 - Faceted filter counts (e.g. language with book counts)
 - Keyset pagination for deep pages
 - Favorite indicator on library grid cards
-- Optional disable open registration
 - Narrow title search (drop `file_name` from title filter)
 - Extend admin edit to publisher and series
 - Populate `page_count` on scan from Calibre metadata

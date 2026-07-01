@@ -158,7 +158,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page on the library; `←`/`→` move between books on detail pages)
 - **Touch navigation** — swipe left/right on library and detail pages (same as arrow keys)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
-- **Favorites only** filter when signed in; favorite checkbox on book detail pages
+- **Favorites only** filter when signed in; favorite checkbox on book detail pages; small star on library cards when signed in
 - Book detail pages with cover, formatted dates, file name, HTML descriptions, download
 - **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified)
 - **Fetch metadata online** and **restore cover from file** (embedded EPUB cover) — administrators only
@@ -203,8 +203,11 @@ Incremental scans are quick when nothing changed.
 ./cleanup_library.py audit                         # read-only report
 ./cleanup_library.py run                           # dry-run: show planned changes
 ./cleanup_library.py run --execute                 # dedupe files and index new EPUBs
+./cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs
 ./cleanup_library.py run --execute --force-clean   # also hard-delete rows with no file on disk
 ```
+
+Same commands are available as `exlibris cleanup audit` and `exlibris cleanup run`. The cron scan script runs cleanup after each scan with `--backfill-hashes` and `--prune-empty-dirs`.
 
 Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute`.
 

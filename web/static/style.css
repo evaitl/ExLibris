@@ -566,6 +566,17 @@ body {
   flex-direction: column;
   gap: 0.35rem;
   min-width: 0;
+  position: relative;
+}
+
+.book-card__favorite {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 0.72rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--accent) 75%, #c9a227 25%);
+  pointer-events: none;
 }
 
 .book-cover {

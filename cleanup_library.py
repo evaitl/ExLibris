@@ -14,10 +14,12 @@ from exlibris.cleanup import (
     CleanupResult,
     apply_duplicate_group,
     audit_library,
+    backfill_content_hashes,
     find_orphan_covers,
     load_books,
     purge_book,
 )
+from exlibris.book_paths import prune_empty_directories
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -273,6 +275,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     result = CleanupResult()
 
     with _connect(db_path) as conn:
+        if args.backfill_hashes:
+            updated, backfill_errors = backfill_content_hashes(conn, execute=execute)
+            result.hashes_backfilled = updated
+            result.errors.extend(backfill_errors)
+            if not args.quiet:
+                verb = "backfilled" if execute else "would backfill"
+                print(f"{verb} {updated} content hash(es)")
+
         report = audit_library(conn, scan_roots, covers_dir=covers_dir)
 
         if not args.quiet:
@@ -282,6 +292,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             print_audit(report, quiet=args.quiet)
 
         repointed_ids: set[int] = set()
+
         for group in report.duplicate_groups:
             try:
                 rows_updated, files_deleted, repointed_id = apply_duplicate_group(
@@ -318,6 +329,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         elif report.new_files and not args.quiet:
             print(f"would index {len(report.new_files)} new file(s)")
 
+        if args.prune_empty_dirs:
+            pruned = prune_empty_directories(scan_roots, execute=execute)
+            result.dirs_pruned = pruned
+            if not args.quiet and pruned:
+                verb = "pruned" if execute else "would prune"
+                print(f"{verb} {pruned} empty director{'y' if pruned == 1 else 'ies'}")
+
         if force_clean:
             valid_ids = {book.id for book in load_books(conn)}
             for book in report.absent_books:
@@ -352,6 +370,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{result.files_deleted} file(s) deleted, "
             f"{result.rows_updated} row(s) updated, "
             f"{result.rows_indexed} row(s) indexed, "
+            f"{result.hashes_backfilled} hash(es) backfilled, "
+            f"{result.dirs_pruned} empty dir(s) pruned, "
             f"{result.rows_purged} row(s) purged, "
             f"{result.covers_removed} cover(s) removed"
         )
@@ -403,6 +423,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force-clean",
         action="store_true",
         help="With --execute, hard-delete DB rows whose file is gone",
+    )
+    run_parser.add_argument(
+        "--backfill-hashes",
+        action="store_true",
+        help="Compute SHA-1 for rows with NULL content_hash",
+    )
+    run_parser.add_argument(
+        "--prune-empty-dirs",
+        action="store_true",
+        help="Remove empty directories under scan roots",
     )
     run_parser.set_defaults(func=cmd_run)
 
