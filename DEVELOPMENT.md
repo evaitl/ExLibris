@@ -28,6 +28,8 @@ data/               ← runtime data (gitignored)
   covers/
   scan.log
 scan_books.py       ← standalone scan entry point
+cleanup_library.py  ← audit/reconcile files vs database
+manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/
   schema/           ← SQL migrations (001–006)
   models.py         ← SQLAlchemy ORM
@@ -48,8 +50,8 @@ exlibris/
 apache/
   exlibris.conf     ← path-based Apache config (/exlibris/)
 scripts/
-  setup-data-dir.sh ← create/migrate data/ directory
-  scan-library.sh   ← cron-friendly scan wrapper
+  setup-data-dir.sh ← create/migrate data/ directory; chmod entry points
+  scan-library.sh   ← cron: scan then cleanup (backfill hashes, prune dirs)
 web/
   cgi-bin/          ← index, book, cover, download, fetch_metadata, restore_cover,
                     ←   login, logout, register, favorite, edit_book
@@ -64,10 +66,11 @@ web/
 
 ### Data flow
 
-1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots.
-2. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination.
-3. **Download:** serves EPUBs only if the path is under a configured scan directory.
-4. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
+1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots; repoints canonical row when duplicate has longer basename.
+2. **Cleanup:** compares scan roots to DB — dedupes by SHA-1 (longest basename), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
+3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination.
+4. **Download:** serves EPUBs only if the path is under a configured scan directory.
+5. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
 
 ---
 
@@ -245,32 +248,58 @@ On Debian/Ubuntu: `sudo apt install python3-venv python3-pip calibre`
 
 ---
 
-## CLI and cron
+## CLI, maintenance scripts, and cron
 
 ```bash
-exlibris scan                         # scan default /media/books (also runs DB migrations)
-exlibris scan --path ~/foo              # additional paths
-exlibris user create NAME               # create web login (scrypt password hash)
-python scan_books.py -v                 # standalone scanner, verbose
-python scan_books.py -q                 # scan without per-file progress
-./scripts/setup-data-dir.sh             # create data/ directory; chmod entry-point scripts
-./scripts/scan-library.sh               # manual or cron scan
+exlibris scan                              # scan default /media/books (runs DB migrations)
+exlibris scan --path ~/foo                 # additional paths
+exlibris user create NAME                  # create web login (scrypt password hash)
+exlibris cleanup audit                     # read-only file vs DB report
+exlibris cleanup run --execute             # dedupe, index new EPUBs (dry-run without --execute)
+exlibris cleanup run --execute \
+  --backfill-hashes --prune-empty-dirs     # also fill NULL content_hash, prune empty dirs
+exlibris cleanup run --execute --force-clean  # hard-delete rows whose file is gone
+python scan_books.py -v                    # standalone scanner, verbose
+./manage_users.py list                     # list accounts (stdlib; no venv)
+./scripts/setup-data-dir.sh                # create data/; chmod entry-point scripts
+./scripts/scan-library.sh                  # manual or cron: scan + cleanup
 ```
 
-Cron example (4 AM daily):
+Cron example (4 AM daily) — runs scan then cleanup with backfill and prune:
 
 ```cron
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
 
+Log: `data/scan.log`
+
+### Library cleanup (`cleanup_library.py` / `exlibris cleanup`)
+
+Dry-run by default; `--execute` applies changes. `--force-clean` requires `--execute` (destructive: deletes book rows, cascades favorites, removes orphan covers).
+
+| Phase | Behavior |
+|-------|----------|
+| Audit | Unindexed files, duplicate groups, new files, absent rows, orphan covers, NULL hashes, out-of-root paths |
+| Dedupe | SHA-1 match → keep longest basename; delete shorter copies; repoint DB (no Calibre) |
+| Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover) |
+| Backfill | `--backfill-hashes`: SHA-1 for rows with `content_hash IS NULL` |
+| Prune | `--prune-empty-dirs`: remove empty directories under scan roots |
+| Purge | `--force-clean`: DELETE rows whose `file_path` is not a regular file |
+
+`audit` and dedupe/repoint use sqlite3 + `sha1_file` (no venv). Indexing new files needs venv + Calibre.
+
+Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
+
 ---
 
-## Session 5 — Library cleanup (June 2026)
+## Session 5 — Library cleanup and favorites (June 2026)
 
-- **`cleanup_library.py`:** audit file tree vs DB; dedupe by SHA-1 (longest basename wins); index new EPUBs; `--force-clean` hard-deletes absent rows; `--backfill-hashes`; `--prune-empty-dirs`
-- **`exlibris cleanup`:** typer wrapper for audit/run; cron scan script runs cleanup after scan
-- **Scanner:** repoints canonical row when duplicate path has longer basename (no Calibre)
-- **Library cards:** small star for favorited books when signed in
+- **`cleanup_library.py` / `exlibris cleanup`:** audit + run; dedupe, index, backfill, prune, force-clean
+- **`exlibris/cleanup.py`**, **`exlibris/book_paths.py`:** reconciliation helpers; `scan_single_file()` in scanner
+- **`manage_users.py`:** list/delete accounts (stdlib path resolution)
+- **Cron:** `scan-library.sh` runs cleanup after each scan
+- **Scanner:** repoints when duplicate path wins longest-basename rule (missing or shorter canonical)
+- **Library cards:** small ★ for favorited books when signed in
 
 ---
 
@@ -319,11 +348,12 @@ Cron example (4 AM daily):
 
 - **UI:** CGI + `library.js`, `detail.js`, `swipe-nav.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
-- **Dedup:** SHA-1 `content_hash`; scanner skips unchanged files by size/mtime before hash/Calibre; missing files hidden from browse
-- **Library browse:** FTS search, pagination, favorites filter, random sort, keyboard and swipe navigation
+- **Dedup:** SHA-1 `content_hash`; scanner/cleanup keep longest basename; missing files hidden from browse
+- **Library browse:** FTS search, pagination, favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
 - **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)
-- **Accounts:** optional login for favorites; open web registration
+- **Accounts:** optional login for favorites; `manage_users.py` for server-side list/delete; open web registration
 - **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover
+- **Cleanup:** `cleanup_library.py` / `exlibris cleanup`; cron runs after scan
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
 - **Scale target:** ~600K books — FTS + pagination in place; keyset pagination still open
@@ -336,10 +366,11 @@ Cron example (4 AM daily):
 - Scan status in header (`data/scan.log` or DB)
 - Faceted filter counts (e.g. language with book counts)
 - Keyset pagination for deep pages
-- Favorite indicator on library grid cards
+- Optional disable open registration
 - Narrow title search (drop `file_name` from title filter)
 - Extend admin edit to publisher and series
 - Populate `page_count` on scan from Calibre metadata
+- `--purge-out-of-root` cleanup flag for DB paths outside scan trees
 
 ---
 

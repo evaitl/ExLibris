@@ -53,7 +53,11 @@ ExLibris/
   data/            ← runtime data (gitignored)
     library.db
     covers/
+    scan.log
   admins.txt       ← local admin usernames (gitignored; copy from admins.txt.example)
+  cleanup_library.py   ← reconcile files vs database
+  manage_users.py      ← list/delete web accounts
+  scan_books.py        ← standalone scan entry point
   web/cgi-bin/     ← web UI
   exlibris/        ← Python package
 
@@ -100,6 +104,7 @@ The scanner:
 - Walks each path recursively for `.epub` files
 - Shows per-file progress (`[n/total]`) unless `--quiet`
 - Skips unchanged files when size and mtime match the database (no file read); otherwise computes SHA-1 to detect duplicates or content changes before calling Calibre
+- **Repoints** the database to a duplicate file with a longer basename when the canonical path is missing or shorter (metadata unchanged; no Calibre)
 - Marks books **missing** when their file is absent from a scanned path (metadata kept; hidden from the web UI until the file reappears)
 - Reads metadata with `ebook-meta` only for new or changed files
 - Saves cover images to `data/covers/`
@@ -117,7 +122,7 @@ python scan_books.py
 
 ### Scheduled scans (cron)
 
-To pick up new books automatically, run a daily scan at 4:00 AM. The helper script activates the project venv, runs `exlibris scan`, and appends output to `data/scan.log`:
+To pick up new books automatically, run a daily scan at 4:00 AM. The helper script activates the project venv, runs `exlibris scan`, then runs `cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs`, and appends output to `data/scan.log`:
 
 ```bash
 chmod +x scripts/scan-library.sh
@@ -135,7 +140,7 @@ Add one line (replace `/path/to/ExLibris` with your clone location):
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
 
-Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip files already indexed by SHA-1, so a nightly run is usually quick unless many new books were added.
+Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip unchanged files when size and mtime match, so a nightly run is usually quick unless many new books were added. Cleanup after each scan deduplicates on-disk copies, indexes new EPUBs, backfills missing SHA-1 hashes, and prunes empty directories.
 
 Check recent scan output:
 
@@ -197,23 +202,40 @@ Incremental scans are quick when nothing changed.
 
 ### Library cleanup
 
-`cleanup_library.py` reconciles the file tree with the database: deduplicates on-disk copies (keeps the longest filename), indexes new EPUBs, and optionally removes stale database rows.
+`cleanup_library.py` (or `exlibris cleanup`) reconciles the file tree with the database.
+
+| Action | Command |
+|--------|---------|
+| Read-only report | `./cleanup_library.py audit` |
+| Dry-run | `./cleanup_library.py run` |
+| Apply dedupe + index new EPUBs | `./cleanup_library.py run --execute` |
+| Also backfill SHA-1, prune empty dirs | add `--backfill-hashes --prune-empty-dirs` |
+| Hard-delete rows with no file on disk | add `--force-clean` (requires `--execute`) |
 
 ```bash
-./cleanup_library.py audit                         # read-only report
-./cleanup_library.py run                           # dry-run: show planned changes
-./cleanup_library.py run --execute                 # dedupe files and index new EPUBs
+./cleanup_library.py audit
 ./cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs
-./cleanup_library.py run --execute --force-clean   # also hard-delete rows with no file on disk
+exlibris cleanup run --execute --backfill-hashes --prune-empty-dirs
 ```
 
-Same commands are available as `exlibris cleanup audit` and `exlibris cleanup run`. The cron scan script runs cleanup after each scan with `--backfill-hashes` and `--prune-empty-dirs`.
+Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute` and is destructive (removes DB rows and cascades favorites).
 
-Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute`.
+**Dedup:** unindexed files with the same SHA-1 as a database row keep the **longest basename**; shorter copies are deleted and the row is repointed.
 
-Moved files (same SHA-1 as an existing row) are **repointed** in the database — only `file_path`, `file_name`, size, and mtime are updated; Calibre metadata extraction is not run again.
+**Moved files:** same SHA-1 at a new path updates only `file_path`, `file_name`, size, and mtime — Calibre is not run again (also handled during `exlibris scan` when the canonical path is missing or shorter).
 
-Manage accounts with `./manage_users.py list` and `./manage_users.py delete USERNAME`.
+**New EPUBs:** files on disk with no hash match are indexed via the same logic as `exlibris scan` (needs venv + Calibre).
+
+`audit` uses system Python only; `run --execute` needs the venv for indexing new files.
+
+### User account maintenance
+
+```bash
+./manage_users.py list
+./manage_users.py delete USERNAME
+```
+
+Works with system Python (no venv required).
 
 ### CGI environment variables
 
@@ -323,9 +345,10 @@ Environment variables (prefix `EXLIBRIS_`) override config values, for example `
 ## How it works
 
 1. **Scanner** (`python scan_books.py` or `exlibris scan`) indexes ebooks and writes metadata to SQLite.
-2. **Web UI** (`web/cgi-bin/`) reads the database and displays the collection.
+2. **Cleanup** (`cleanup_library.py` or `exlibris cleanup`) deduplicates files, indexes orphans, and optionally purges stale rows.
+3. **Web UI** (`web/cgi-bin/`) reads the database and displays the collection.
 
-Scanning and serving are separate processes, so you can re-index on a schedule without restarting the web server.
+Scanning, cleanup, and serving are separate processes. Cron runs scan then cleanup nightly; the web server does not need a restart.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation history and server deployment notes.
 
