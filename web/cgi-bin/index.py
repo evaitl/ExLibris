@@ -27,6 +27,7 @@ def main() -> None:
     raw_page_size = form.getfirst("page_size", "") or ""
     raw_page = form.getfirst("page", "1") or "1"
     page = int(raw_page) if str(raw_page).isdigit() else 1
+    notice = form.getfirst("notice", "") or ""
 
     try:
         with connect() as conn:
@@ -70,6 +71,7 @@ def main() -> None:
             favorites_only=favorites_only,
             current_user=current_user,
             favorite_book_ids=fav_ids,
+            notice=notice,
         )
         print("Content-Type: text/html; charset=utf-8")
         print()

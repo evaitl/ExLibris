@@ -802,6 +802,17 @@ body {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
+.button--delete {
+  background: var(--surface);
+  color: #c0392b;
+  border-color: color-mix(in srgb, #c0392b 55%, var(--accent));
+  cursor: pointer;
+}
+
+.button--delete:hover:not(:disabled) {
+  background: color-mix(in srgb, #c0392b 10%, var(--surface));
+}
+
 .subtitle {
   color: var(--muted);
   margin-top: 0.35rem;

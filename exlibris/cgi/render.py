@@ -17,6 +17,7 @@ from exlibris.cgi.common import (
     cover_href,
     download_href,
     esc,
+    delete_book_action,
     edit_book_action,
     favorite_action,
     fetch_metadata_action,
@@ -364,6 +365,7 @@ def render_library(
     favorites_only: bool = False,
     current_user: UserRow | None = None,
     favorite_book_ids: frozenset[int] | None = None,
+    notice: str = "",
 ) -> str:
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
@@ -484,7 +486,11 @@ def render_library(
             Favorites only
           </label>
 """
-    body = f"""    <section class="toolbar">
+    flash = ""
+    if notice:
+        flash = f"""    <p class="flash flash--notice">{esc(notice)}</p>
+"""
+    body = f"""{flash}    <section class="toolbar">
       <form id="library-filter-form" class="filter-form filter-form--compact" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
         <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">
         <div class="filter-form__main">
@@ -718,11 +724,18 @@ def render_book_detail(
 """
 
     fetch_metadata_form = ""
+    delete_book_form = ""
     if user_is_admin:
         fetch_metadata_form = f"""              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">
                 {browse_hidden}
                 <button type="submit" class="button button--fetch">Fetch metadata online</button>
+              </form>
+"""
+        delete_book_form = f"""              <form class="book-actions__form book-actions__form--delete" method="post" action="{esc(delete_book_action())}" onsubmit="return confirm('Are you sure? This will permanently delete the book file and remove it from the library.');">
+                <input type="hidden" name="id" value="{book.id}">
+                {browse_hidden}
+                <button type="submit" class="button button--delete">Delete book</button>
               </form>
 """
 
@@ -781,7 +794,7 @@ def render_book_detail(
 {title_author_block}
 {favorite_form}            <p class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
-              {fetch_metadata_form}{restore_cover_form}
+              {fetch_metadata_form}{restore_cover_form}{delete_book_form}
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
             </p>
           </header>

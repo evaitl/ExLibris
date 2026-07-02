@@ -160,6 +160,10 @@ def edit_book_action() -> str:
     return cgi_script("edit_book.py")
 
 
+def delete_book_action() -> str:
+    return cgi_script("delete_book.py")
+
+
 def cover_cache_version(book: BookRow) -> str:
     """Cache-bust token for cover URLs; uses file mtime when the cover exists on disk."""
     if book.cover_path:
@@ -954,6 +958,48 @@ def update_book_fields(conn: sqlite3.Connection, book_id: int, fields: dict[str,
     columns = ", ".join(f"{key} = ?" for key in fields)
     values = list(fields.values()) + [book_id]
     conn.execute(f"UPDATE books SET {columns} WHERE id = ?", values)
+    conn.commit()
+
+
+class DeleteBookError(Exception):
+    pass
+
+
+_COVER_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+def _remove_book_cover_files(book: BookRow) -> None:
+    if book.cover_path:
+        cover = project_root() / book.cover_path
+        if cover.is_file():
+            cover.unlink()
+    covers_dir = project_root() / "data" / "covers"
+    for ext in _COVER_EXTENSIONS:
+        path = covers_dir / f"{book.id}{ext}"
+        if path.is_file():
+            path.unlink()
+
+
+def delete_book(conn: sqlite3.Connection, book: BookRow) -> None:
+    """Delete ebook file, cover images, and database row for one book."""
+    on_disk = Path(book.file_path).expanduser().resolve()
+    book_file = allowed_book_file(book.file_path)
+    if on_disk.is_file() and book_file is None:
+        raise DeleteBookError(
+            "Book file is outside configured library paths and cannot be deleted."
+        )
+    if book_file is not None:
+        try:
+            book_file.unlink()
+        except OSError as exc:
+            raise DeleteBookError(f"Could not delete book file: {exc}") from exc
+
+    try:
+        _remove_book_cover_files(book)
+    except OSError as exc:
+        raise DeleteBookError(f"Could not delete cover image: {exc}") from exc
+
+    conn.execute("DELETE FROM books WHERE id = ?", (book.id,))
     conn.commit()
 
 
