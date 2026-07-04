@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode
 
 from exlibris.admins import is_admin_username
 from exlibris.auth import (
+    ADMIN_MODE_COOKIE,
     SESSION_COOKIE,
     create_session_token,
     parse_cookie_header,
@@ -162,6 +163,10 @@ def edit_book_action() -> str:
 
 def delete_book_action() -> str:
     return cgi_script("delete_book.py")
+
+
+def admin_mode_action() -> str:
+    return cgi_script("admin_mode.py")
 
 
 def cover_cache_version(book: BookRow) -> str:
@@ -687,8 +692,17 @@ def book_detail_context(
     return user, favorite
 
 
-def is_admin(user: UserRow | None) -> bool:
+def is_admin_user(user: UserRow | None) -> bool:
     return is_admin_username(user.username if user is not None else None)
+
+
+def admin_mode_enabled() -> bool:
+    cookie_header = os.environ.get("HTTP_COOKIE", "")
+    return parse_cookie_header(cookie_header, ADMIN_MODE_COOKIE) == "1"
+
+
+def is_admin(user: UserRow | None) -> bool:
+    return is_admin_user(user) and admin_mode_enabled()
 
 
 def _book_filter_clause(

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from exlibris.auth import clear_session_cookie_header
+from exlibris.auth import admin_mode_cookie_header, clear_session_cookie_header
 from exlibris.cgi.render import render_error
 
 
@@ -26,6 +26,7 @@ def main() -> None:
     print("Status: 303 See Other")
     print("Location: index.py")
     print(clear_session_cookie_header())
+    print(admin_mode_cookie_header(enabled=False))
     print()
 
 

@@ -19,6 +19,8 @@ from exlibris.cgi.common import (
     esc,
     delete_book_action,
     edit_book_action,
+    admin_mode_action,
+    admin_mode_enabled,
     favorite_action,
     fetch_metadata_action,
     library_index_href,
@@ -30,6 +32,7 @@ from exlibris.cgi.common import (
     format_size,
     has_search_filters,
     is_admin,
+    is_admin_user,
     normalize_page_size,
     normalize_sort_dir,
     static_asset,
@@ -43,9 +46,22 @@ def _header_auth(current_user: UserRow | None) -> str:
         <a href="{esc(login_action())}">Log in</a>
         <a href="{esc(register_action())}">Create account</a>
       </nav>"""
+    admin_toggle = ""
+    if is_admin_user(current_user):
+        enabled = admin_mode_enabled()
+        checked = " checked" if enabled else ""
+        hidden_val = "1" if enabled else "0"
+        admin_toggle = f"""        <form class="auth-nav__admin" method="post" action="{esc(admin_mode_action())}">
+          <label class="auth-nav__admin-label">
+            <input type="checkbox"{checked} onchange="var h=this.form.elements.namedItem('enabled');h.value=this.checked?'1':'0';this.form.submit();" aria-label="Admin mode">
+            <input type="hidden" name="enabled" value="{hidden_val}">
+            admin
+          </label>
+        </form>
+"""
     return f"""      <nav class="auth-nav">
         <span class="auth-nav__user">Signed in as {esc(current_user.username)}</span>
-        <form class="auth-nav__logout" method="post" action="{esc(logout_action())}">
+{admin_toggle}        <form class="auth-nav__logout" method="post" action="{esc(logout_action())}">
           <button type="submit">Log out</button>
         </form>
       </nav>"""

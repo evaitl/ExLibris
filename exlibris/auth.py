@@ -8,6 +8,7 @@ import time
 from urllib.parse import unquote
 
 SESSION_COOKIE = "exlibris_session"
+ADMIN_MODE_COOKIE = "exlibris_admin_mode"
 SESSION_DAYS = 30
 SCRYPT_N = 2**14
 SCRYPT_R = 8
@@ -111,3 +112,17 @@ def session_cookie_header(token: str) -> str:
 def clear_session_cookie_header() -> str:
     path = cookie_path()
     return f"Set-Cookie: {SESSION_COOKIE}=; Path={path}; HttpOnly; SameSite=Lax; Max-Age=0"
+
+
+def admin_mode_cookie_header(*, enabled: bool) -> str:
+    path = cookie_path()
+    if enabled:
+        max_age = SESSION_DAYS * 86400
+        return (
+            f"Set-Cookie: {ADMIN_MODE_COOKIE}=1; Path={path}; "
+            f"HttpOnly; SameSite=Lax; Max-Age={max_age}"
+        )
+    return (
+        f"Set-Cookie: {ADMIN_MODE_COOKIE}=; Path={path}; "
+        f"HttpOnly; SameSite=Lax; Max-Age=0"
+    )

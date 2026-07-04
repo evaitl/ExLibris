@@ -109,6 +109,19 @@ body {
   color: var(--muted);
 }
 
+.auth-nav__admin {
+  margin: 0;
+}
+
+.auth-nav__admin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
 .auth-nav__logout {
   margin: 0;
 }
