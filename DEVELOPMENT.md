@@ -31,7 +31,7 @@ scan_books.py       ← standalone scan entry point
 cleanup_library.py  ← audit/reconcile files vs database
 manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/
-  schema/           ← SQL migrations (001–007)
+  schema/           ← SQL migrations (001–008)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
   auth.py           ← scrypt passwords, signed session cookies

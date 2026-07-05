@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from exlibris.author_tokens import tokenize_authors
+
 _FTS_SPECIAL = re.compile(r'["*]')
 
 
@@ -12,6 +14,28 @@ def search_words(text: str) -> list[str]:
 def escape_fts_term(word: str) -> str:
     cleaned = _FTS_SPECIAL.sub(" ", word).strip()
     return cleaned.replace('"', '""')
+
+
+def _like_prefix(token: str) -> str:
+    escaped = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
+def append_author_token_filters(
+    where: list[str],
+    params: list[object],
+    author: str,
+) -> None:
+    """Require every search word to match author tokens by prefix (indexed lookup)."""
+    for word in search_words(author):
+        for token in tokenize_authors(word):
+            where.append(
+                "books.id IN ("
+                "SELECT book_id FROM book_author_tokens "
+                "WHERE token LIKE ? ESCAPE '\\'"
+                ")"
+            )
+            params.append(_like_prefix(token))
 
 
 def fts_field_match(columns: list[str], words: list[str]) -> str | None:
@@ -42,10 +66,6 @@ def build_fts_match(
             ["title", "sort_title", "file_name"],
             search_words(title),
         )
-        if clause:
-            parts.append(clause)
-    if author.strip():
-        clause = fts_field_match(["authors"], search_words(author))
         if clause:
             parts.append(clause)
     if publisher.strip():

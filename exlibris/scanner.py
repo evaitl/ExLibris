@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from exlibris.author_tokens import sync_author_tokens
 from exlibris.book_paths import (
     collect_book_files,
     delete_file_under_roots,
@@ -284,6 +285,8 @@ def scan_single_file(
             session.add(book)
 
         session.commit()
+        raw = session.connection().connection.dbapi_connection
+        sync_author_tokens(raw, book.id, book.authors)
         return FileScanResult("indexed", book)
     except EbookMetaError:
         session.rollback()

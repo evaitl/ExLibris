@@ -18,7 +18,13 @@ from exlibris.auth import (
     parse_session_token,
     session_secret,
 )
-from exlibris.cgi.search import build_fts_match, search_words
+from exlibris.author_tokens import author_tokens_available, sync_author_tokens
+from exlibris.cgi.search import (
+    append_author_token_filters,
+    build_fts_match,
+    fts_field_match,
+    search_words,
+)
 from exlibris.cover_paths import (
     cover_public_segment,
     iter_cover_files,
@@ -739,6 +745,7 @@ def is_admin(user: UserRow | None) -> bool:
 
 
 def _book_filter_clause(
+    conn: sqlite3.Connection,
     *,
     title: str,
     author: str,
@@ -753,12 +760,21 @@ def _book_filter_clause(
     order_by = sort_order_by(sort, sort_dir)
     params: list[object] = []
     where: list[str] = ["books.is_missing = 0"]
+    use_author_tokens = author_tokens_available(conn)
     fts_match = build_fts_match(
         title=title,
-        author=author,
         publisher=publisher,
         genre=genre,
     )
+
+    if author.strip() and use_author_tokens:
+        append_author_token_filters(where, params, author)
+    elif author.strip():
+        author_clause = fts_field_match(["authors"], search_words(author))
+        if author_clause:
+            fts_match = (
+                f"{fts_match} AND {author_clause}" if fts_match else author_clause
+            )
 
     if favorites_only and user_id is not None:
         where.append(
@@ -774,7 +790,7 @@ def _book_filter_clause(
                 words=_search_words(title),
                 columns=["books.title", "books.sort_title", "books.file_name"],
             )
-        if author.strip():
+        if author.strip() and not use_author_tokens:
             _append_word_match(
                 where,
                 params,
@@ -872,6 +888,7 @@ def list_books(
     options = load_filter_options(conn)
 
     fts_match, where, params, order_by = _book_filter_clause(
+        conn,
         title=title,
         author=author,
         publisher=publisher,
@@ -942,18 +959,15 @@ def list_books(
     )
     rows = conn.execute(select_sql, select_params).fetchall()
 
-    if fts_match:
+    if not filtered:
+        filtered_count = library_total
+    else:
         if len(rows) < page_size:
             filtered_count = offset + len(rows)
             count_exact = True
         else:
             filtered_count = offset + len(rows)
             count_exact = False
-    elif not filtered:
-        filtered_count = library_total
-    else:
-        count_sql, count_params = _filtered_count_sql(fts_match, where, params)
-        filtered_count = int(conn.execute(count_sql, count_params).fetchone()[0])
 
     if count_exact:
         max_page = max(1, (filtered_count + page_size - 1) // page_size)
@@ -983,6 +997,7 @@ def neighbor_book_ids(
         return None, None
 
     fts_match, where, params, order_by = _book_filter_clause(
+        conn,
         title=ctx.title,
         author=ctx.author,
         publisher=ctx.publisher,
@@ -1046,6 +1061,8 @@ def update_book_fields(conn: sqlite3.Connection, book_id: int, fields: dict[str,
     columns = ", ".join(f"{key} = ?" for key in fields)
     values = list(fields.values()) + [book_id]
     conn.execute(f"UPDATE books SET {columns} WHERE id = ?", values)
+    if "authors" in fields:
+        sync_author_tokens(conn, book_id, fields["authors"], commit=False)
     conn.commit()
 
 

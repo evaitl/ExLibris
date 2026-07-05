@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import sqlite3
+
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -7,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 def get_engine(db_path: Path) -> Engine:
@@ -71,7 +73,31 @@ def init_db(engine: Engine) -> sessionmaker[Session]:
             f"application version {CURRENT_SCHEMA_VERSION}"
         )
 
+    _ensure_author_tokens_backfilled(engine)
+
     return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _ensure_author_tokens_backfilled(engine: Engine) -> None:
+    from exlibris.author_tokens import (
+        author_tokens_available,
+        author_tokens_table_exists,
+        backfill_author_tokens,
+    )
+
+    raw = engine.raw_connection()
+    try:
+        conn = raw
+        conn.row_factory = sqlite3.Row
+        if not author_tokens_table_exists(conn):
+            return
+        if author_tokens_available(conn):
+            return
+        if conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 0:
+            return
+        backfill_author_tokens(conn)
+    finally:
+        raw.close()
 
 
 def find_book_by_content_hash(session: Session, content_hash: str) -> Book | None:
