@@ -81,6 +81,16 @@ Create the directory if needed: `sudo mkdir -p /media/books`
 
 ## Scan the library
 
+The scanner needs the project virtualenv (pydantic, SQLAlchemy, etc.). `scan_books.py` re-runs itself with `.venv/bin/python` when you invoke it with system Python.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+./scan_books.py
+```
+
+Or activate the venv explicitly:
+
 ```bash
 source .venv/bin/activate
 python scan_books.py

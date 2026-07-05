@@ -3,9 +3,36 @@
 
 from __future__ import annotations
 
-import argparse
+import os
 import sys
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent
+_VENV_PYTHON = _ROOT / ".venv" / "bin" / "python"
+
+
+def _ensure_project_python() -> None:
+    """Re-exec with the project venv when started via system Python."""
+    if os.environ.get("EXLIBRIS_REEXEC") == "1":
+        return
+    try:
+        import pydantic  # noqa: F401
+    except ModuleNotFoundError:
+        if _VENV_PYTHON.is_file():
+            os.environ["EXLIBRIS_REEXEC"] = "1"
+            os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), *sys.argv])
+        print(
+            "error: scanner dependencies are not installed.\n"
+            "  python3 -m venv .venv && .venv/bin/pip install -e .\n"
+            "  or: source .venv/bin/activate && python scan_books.py",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+
+_ensure_project_python()
+
+import argparse
 
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
 from exlibris.database import get_engine, init_db
