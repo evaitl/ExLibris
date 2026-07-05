@@ -75,8 +75,10 @@ def backfill_author_tokens(
         if not rows:
             break
         for row in rows:
-            sync_author_tokens(conn, int(row["id"]), row["authors"], commit=False)
-            last_id = int(row["id"])
+            book_id = int(row[0])
+            authors = row[1]
+            sync_author_tokens(conn, book_id, authors, commit=False)
+            last_id = book_id
             processed += 1
         conn.commit()
     return processed

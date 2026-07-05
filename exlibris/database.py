@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import sqlite3
-
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -88,7 +86,6 @@ def _ensure_author_tokens_backfilled(engine: Engine) -> None:
     raw = engine.raw_connection()
     try:
         conn = raw
-        conn.row_factory = sqlite3.Row
         if not author_tokens_table_exists(conn):
             return
         if author_tokens_available(conn):
