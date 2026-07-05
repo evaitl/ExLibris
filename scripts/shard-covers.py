@@ -1,17 +1,42 @@
+#!/usr/bin/env python3
 """Move flat cover images into shard subdirs and update books.cover_path."""
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+_VENV_PYTHON = _ROOT / ".venv" / "bin" / "python"
+
+
+def _ensure_project_python() -> None:
+    if os.environ.get("EXLIBRIS_REEXEC") == "1":
+        return
+    try:
+        import pydantic  # noqa: F401
+    except ModuleNotFoundError:
+        if _VENV_PYTHON.is_file():
+            os.environ["EXLIBRIS_REEXEC"] = "1"
+            os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), *sys.argv])
+        print(
+            "error: run from the project venv:\n"
+            "  .venv/bin/python scripts/shard-covers.py",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+
+_ensure_project_python()
+
 import argparse
 import shutil
 import sqlite3
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_database_path
 from exlibris.cover_paths import (
