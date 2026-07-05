@@ -19,6 +19,7 @@ from exlibris.cover_paths import cover_dest_base
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
 from exlibris.file_hash import sha1_file
+from exlibris.library_cache import refresh_library_stats
 from exlibris.models import Book
 
 ScanProgressCallback = Callable[[int, int, Path, str], None]
@@ -371,5 +372,8 @@ def scan_paths(
                 f"marked {stats.marked_missing} book(s) missing",
                 flush=True,
             )
+
+    raw = session.connection().connection.dbapi_connection
+    refresh_library_stats(raw)
 
     return stats

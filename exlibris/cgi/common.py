@@ -25,6 +25,7 @@ from exlibris.cover_paths import (
     parse_book_id_from_cover,
     remove_cover_files,
 )
+from exlibris.library_cache import cached_languages, cached_library_total, refresh_library_stats
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,8 @@ def connect() -> sqlite3.Connection:
         raise FileNotFoundError(f"Library database not found: {db}")
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA cache_size = -64000")
+    conn.execute("PRAGMA mmap_size = 268435456")
     return conn
 
 
@@ -290,31 +293,53 @@ def format_published_date(value: str | None) -> str:
 
 
 def row_to_book(row: sqlite3.Row) -> BookRow:
+    keys = row.keys()
+
+    def col(name: str, default: object = None) -> object:
+        return row[name] if name in keys else default
+
     return BookRow(
         id=row["id"],
-        file_path=row["file_path"],
+        file_path=str(col("file_path", "")),
         file_name=row["file_name"],
         format=row["format"],
         file_size=row["file_size"],
-        file_mtime=row["file_mtime"],
-        content_hash=row["content_hash"],
-        title=row["title"],
-        sort_title=row["sort_title"],
-        authors=row["authors"],
-        publisher=row["publisher"],
-        published_date=row["published_date"],
-        isbn=row["isbn"],
-        language=row["language"],
-        description=row["description"],
-        series=row["series"],
-        series_index=row["series_index"],
-        page_count=row["page_count"],
-        cover_path=row["cover_path"] if "cover_path" in row.keys() else None,
-        tags=row["tags"] if "tags" in row.keys() else None,
-        first_seen_at=row["first_seen_at"],
-        last_scanned_at=row["last_scanned_at"],
-        is_missing=row["is_missing"],
+        file_mtime=float(col("file_mtime", 0)),
+        content_hash=col("content_hash"),
+        title=col("title"),
+        sort_title=col("sort_title"),
+        authors=col("authors"),
+        publisher=col("publisher"),
+        published_date=col("published_date"),
+        isbn=col("isbn"),
+        language=col("language"),
+        description=col("description"),
+        series=col("series"),
+        series_index=col("series_index"),
+        page_count=col("page_count"),
+        cover_path=col("cover_path"),
+        tags=col("tags"),
+        first_seen_at=str(col("first_seen_at", "")),
+        last_scanned_at=str(col("last_scanned_at", "")),
+        is_missing=int(col("is_missing", 0)),
     )
+
+
+_LIST_BOOK_COLUMNS = (
+    "books.id",
+    "books.file_name",
+    "books.format",
+    "books.file_size",
+    "books.title",
+    "books.sort_title",
+    "books.authors",
+    "books.series",
+    "books.series_index",
+    "books.cover_path",
+    "books.is_missing",
+    "books.last_scanned_at",
+)
+_LIST_BOOK_SELECT = ", ".join(_LIST_BOOK_COLUMNS)
 
 
 SORT_COLUMNS = {
@@ -562,20 +587,7 @@ class FilterOptions:
 
 
 def load_filter_options(conn: sqlite3.Connection) -> FilterOptions:
-    languages = [
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT DISTINCT language FROM books
-            WHERE is_missing = 0
-              AND language IS NOT NULL
-              AND TRIM(language) != ''
-            ORDER BY language COLLATE NOCASE
-            """
-        ).fetchall()
-    ]
-
-    return FilterOptions(languages=languages)
+    return FilterOptions(languages=cached_languages(conn))
 
 
 def _search_words(text: str) -> list[str]:
@@ -817,7 +829,7 @@ def _select_books_sql(
     where_sql = " AND ".join(where)
     if fts_match:
         sql = (
-            "SELECT books.* FROM books "
+            f"SELECT {_LIST_BOOK_SELECT} FROM books "
             "INNER JOIN books_fts ON books_fts.rowid = books.id "
             f"WHERE books_fts MATCH ? AND {where_sql} "
             f"ORDER BY {order_by}, books.id"
@@ -825,7 +837,7 @@ def _select_books_sql(
         query_params: list[object] = [fts_match, *params]
     else:
         sql = (
-            f"SELECT books.* FROM books WHERE {where_sql} "
+            f"SELECT {_LIST_BOOK_SELECT} FROM books WHERE {where_sql} "
             f"ORDER BY {order_by}, books.id"
         )
         query_params = list(params)
@@ -852,13 +864,11 @@ def list_books(
     page_size: int | str = DEFAULT_PAGE_SIZE,
     favorites_only: bool = False,
     user_id: int | None = None,
-) -> tuple[list[BookRow], int, int, int, FilterOptions]:
-    """Return books, filtered_count, library_total, current_page, filter_options."""
+) -> tuple[list[BookRow], int, int, int, FilterOptions, bool]:
+    """Return books, filtered_count, library_total, page, options, count_exact."""
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
-    library_total = int(
-        conn.execute("SELECT COUNT(*) FROM books WHERE is_missing = 0").fetchone()[0]
-    )
+    library_total = cached_library_total(conn)
     options = load_filter_options(conn)
 
     fts_match, where, params, order_by = _book_filter_clause(
@@ -873,18 +883,33 @@ def list_books(
         user_id=user_id,
     )
 
-    count_sql, count_params = _filtered_count_sql(fts_match, where, params)
-    filtered_count = int(conn.execute(count_sql, count_params).fetchone()[0])
-
+    filtered = has_search_filters(
+        title=title,
+        author=author,
+        publisher=publisher,
+        genre=genre,
+        language=language,
+        favorites_only=favorites_only,
+    )
     page = max(1, page)
+    count_exact = True
 
     if sort == "random":
+        if fts_match:
+            count_exact = False
+            filtered_count = page_size
+        elif not filtered:
+            filtered_count = library_total
+        else:
+            count_sql, count_params = _filtered_count_sql(fts_match, where, params)
+            filtered_count = int(conn.execute(count_sql, count_params).fetchone()[0])
+
         limit = min(page_size, filtered_count) if filtered_count else 0
         if limit == 0:
-            return [], filtered_count, library_total, page, options
+            return [], filtered_count, library_total, page, options, count_exact
         if fts_match:
             random_sql = (
-                "SELECT books.* FROM books "
+                f"SELECT {_LIST_BOOK_SELECT} FROM books "
                 "INNER JOIN books_fts ON books_fts.rowid = books.id "
                 f"WHERE books_fts MATCH ? AND {' AND '.join(where)} "
                 "ORDER BY RANDOM() LIMIT ?"
@@ -892,16 +917,19 @@ def list_books(
             random_params: list[object] = [fts_match, *params, limit]
         else:
             random_sql = (
-                f"SELECT books.* FROM books WHERE {' AND '.join(where)} "
+                f"SELECT {_LIST_BOOK_SELECT} FROM books WHERE {' AND '.join(where)} "
                 "ORDER BY RANDOM() LIMIT ?"
             )
             random_params = [*params, limit]
         rows = conn.execute(random_sql, random_params).fetchall()
-        return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
-
-    max_page = max(1, (filtered_count + page_size - 1) // page_size)
-    if page > max_page:
-        page = max_page
+        return (
+            [row_to_book(row) for row in rows],
+            filtered_count,
+            library_total,
+            page,
+            options,
+            count_exact,
+        )
 
     offset = (page - 1) * page_size
     select_sql, select_params = _select_books_sql(
@@ -914,7 +942,32 @@ def list_books(
     )
     rows = conn.execute(select_sql, select_params).fetchall()
 
-    return [row_to_book(row) for row in rows], filtered_count, library_total, page, options
+    if fts_match:
+        if len(rows) < page_size:
+            filtered_count = offset + len(rows)
+            count_exact = True
+        else:
+            filtered_count = offset + len(rows)
+            count_exact = False
+    elif not filtered:
+        filtered_count = library_total
+    else:
+        count_sql, count_params = _filtered_count_sql(fts_match, where, params)
+        filtered_count = int(conn.execute(count_sql, count_params).fetchone()[0])
+
+    if count_exact:
+        max_page = max(1, (filtered_count + page_size - 1) // page_size)
+        if page > max_page:
+            page = max_page
+
+    return (
+        [row_to_book(row) for row in rows],
+        filtered_count,
+        library_total,
+        page,
+        options,
+        count_exact,
+    )
 
 
 def neighbor_book_ids(
@@ -1030,6 +1083,7 @@ def delete_book(conn: sqlite3.Connection, book: BookRow) -> None:
 
     conn.execute("DELETE FROM books WHERE id = ?", (book.id,))
     conn.commit()
+    refresh_library_stats(conn)
 
 
 class EditBookError(Exception):

@@ -250,6 +250,8 @@ def _pagination_nav(
     page: int,
     filtered_count: int,
     page_size: int,
+    books_on_page: int,
+    filtered_count_exact: bool,
     title: str,
     author: str,
     publisher: str,
@@ -316,8 +318,41 @@ def _pagination_nav(
 {next_link}    </nav>
 """
 
-    if filtered_count <= page_size:
+    if filtered_count_exact and filtered_count <= page_size:
         return ""
+    if not filtered_count_exact and page == 1 and books_on_page < page_size:
+        return ""
+
+    if not filtered_count_exact:
+        prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
+        next_url = (
+            base + _filter_query(**common, page=page + 1)
+            if books_on_page >= page_size
+            else ""
+        )
+        attrs = [
+            'class="pagination"',
+            'aria-label="Search results pages"',
+            "data-page-nav",
+        ]
+        if prev_url:
+            attrs.append(f'data-prev-url="{esc(prev_url)}"')
+        if next_url:
+            attrs.append(f'data-next-url="{esc(next_url)}"')
+        prev_link = ""
+        if prev_url:
+            prev_link = (
+                f'      <a class="pagination__link" href="{esc(prev_url)}">← Previous</a>\n'
+            )
+        next_link = ""
+        if next_url:
+            next_link = (
+                f'      <a class="pagination__link" href="{esc(next_url)}">Next →</a>\n'
+            )
+        return f"""    <nav {" ".join(attrs)}>
+{prev_link}      <span class="pagination__status">Page {page} · more results available · ← → to browse</span>
+{next_link}    </nav>
+"""
 
     max_page = (filtered_count + page_size - 1) // page_size
     prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
@@ -370,6 +405,7 @@ def render_library(
     page: int,
     options: FilterOptions,
     *,
+    count_exact: bool = True,
     selected_title: str,
     selected_author: str,
     selected_publisher: str,
@@ -412,6 +448,8 @@ def render_library(
             page=page,
             filtered_count=filtered_count,
             page_size=page_size,
+            books_on_page=len(books),
+            filtered_count_exact=count_exact,
             title=selected_title,
             author=selected_author,
             publisher=selected_publisher,
@@ -458,13 +496,19 @@ def render_library(
             )
     elif filtered_count:
         start = (page - 1) * page_size + 1
-        end = min(page * page_size, filtered_count)
+        end = (page - 1) * page_size + len(books)
         favorites_note = " · favorites" if favorites_only else ""
         if filtered:
-            stats = (
-                f"Showing {start:,}–{end:,} of {filtered_count:,} matches"
-                f"{favorites_note} · {_format_count(library_total)} in library"
-            )
+            if count_exact:
+                stats = (
+                    f"Showing {start:,}–{end:,} of {filtered_count:,} matches"
+                    f"{favorites_note} · {_format_count(library_total)} in library"
+                )
+            else:
+                stats = (
+                    f"Showing {start:,}–{end:,} of {filtered_count:,}+ matches"
+                    f"{favorites_note} · {_format_count(library_total)} in library"
+                )
         else:
             stats = (
                 f"Showing {start:,}–{end:,} of {_format_count(library_total)} in library"

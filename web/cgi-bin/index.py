@@ -35,7 +35,7 @@ def main() -> None:
             favorites_only = (
                 form.getfirst("favorites") == "1" and current_user is not None
             )
-            books, filtered_count, library_total, page, options = list_books(
+            books, filtered_count, library_total, page, options, count_exact = list_books(
                 conn,
                 title=title,
                 author=author,
@@ -60,6 +60,7 @@ def main() -> None:
             library_total,
             page,
             options,
+            count_exact=count_exact,
             selected_title=title,
             selected_author=author,
             selected_publisher=publisher,

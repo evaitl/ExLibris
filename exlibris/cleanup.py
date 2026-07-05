@@ -16,6 +16,7 @@ from exlibris.cover_paths import (
     iter_cover_files,
     parse_book_id_from_cover,
 )
+from exlibris.library_cache import refresh_library_stats
 from exlibris.file_hash import sha1_file
 
 
@@ -218,6 +219,7 @@ def purge_book(conn: sqlite3.Connection, book_id: int) -> int:
     favorites = int(row[0]) if row else 0
     conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
     conn.commit()
+    refresh_library_stats(conn)
     return favorites
 
 
