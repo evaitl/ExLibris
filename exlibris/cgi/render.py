@@ -108,7 +108,7 @@ def _cover_img(book: BookRow, *, css_class: str = "book-cover") -> str:
     if book.cover_path:
         version = cover_cache_version(book)
         return (
-            f'<img class="{css_class}" src="{esc(cover_href(book.id, version=version))}" '
+            f'<img class="{css_class}" src="{esc(cover_href(book.cover_path, version=version))}" '
             f'alt="Cover: {esc(title)}" loading="lazy">'
         )
     initial = esc(title[0].upper() if title else "?")

@@ -46,10 +46,11 @@ def test_delete_book_removes_file_cover_and_row(monkeypatch) -> None:
         books_dir.mkdir()
         covers_dir = root / "data" / "covers"
         covers_dir.mkdir(parents=True)
+        (covers_dir / "00").mkdir()
 
         ebook = books_dir / "sample.epub"
         ebook.write_bytes(b"book-bytes")
-        cover = covers_dir / "1.jpg"
+        cover = covers_dir / "00" / "1.jpg"
         cover.write_bytes(b"cover")
 
         db_path = root / "library.db"
@@ -64,7 +65,7 @@ def test_delete_book_removes_file_cover_and_row(monkeypatch) -> None:
                 1,
                 str(ebook),
                 ebook.name,
-                "data/covers/1.jpg",
+                "data/covers/00/1.jpg",
                 "Sample",
                 ebook.stat().st_size,
                 ebook.stat().st_mtime,
@@ -97,7 +98,7 @@ def test_delete_book_removes_file_cover_and_row(monkeypatch) -> None:
             series=None,
             series_index=None,
             page_count=None,
-            cover_path="data/covers/1.jpg",
+            cover_path="data/covers/00/1.jpg",
             tags=None,
             first_seen_at="now",
             last_scanned_at="now",

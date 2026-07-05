@@ -107,7 +107,7 @@ The scanner:
 - **Repoints** the database to a duplicate file with a longer basename when the canonical path is missing or shorter (metadata unchanged; no Calibre), and **deletes** the old shorter on-disk copy when it still exists under a scan root
 - Marks books **missing** when their file is absent from a scanned path (metadata kept; hidden from the web UI until the file reappears)
 - Reads metadata with `ebook-meta` only for new or changed files
-- Saves cover images to `data/covers/`
+- Saves cover images to `data/covers/NN/{id}.jpg` (sharded by `book_id % 100`)
 - Upserts records into `data/library.db`
 
 Large libraries can take a long time. Each book is committed as it is processed, so the web UI updates while a scan is running.
@@ -237,6 +237,23 @@ Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force
 
 Works with system Python (no venv required).
 
+### Cover images
+
+Covers are stored under `data/covers/` in shard subdirectories by the **last two digits** of the book id (`book_id % 100`). Example: book `12342` → `data/covers/42/12342.jpg`. The path is stored in `books.cover_path`.
+
+The web UI serves covers as **static files** (Apache `Alias` to `data/covers/`), not via CGI — one less database lookup per thumbnail on the library grid.
+
+**Upgrading an existing library** with flat `data/covers/{id}.jpg` files:
+
+```bash
+./scripts/shard-covers.py              # dry-run: report moves and DB updates
+./scripts/shard-covers.py --execute    # move files and update books.cover_path
+```
+
+No rescan required. New scans and admin cover actions write sharded paths automatically.
+
+Legacy `cover.py?id=…` URLs redirect (301) to the static cover URL.
+
 ### CGI environment variables
 
 | Variable | Purpose |
@@ -244,7 +261,8 @@ Works with system Python (no venv required).
 | `EXLIBRIS_DATABASE_PATH` | Path to `data/library.db` |
 | `EXLIBRIS_CGI_PREFIX` | URL prefix for CGI scripts (e.g. `/exlibris/cgi-bin/`) |
 | `EXLIBRIS_STATIC_URL` | URL to the CSS file (e.g. `/exlibris/static/style.css`) |
-| `EXLIBRIS_COVERS_DIR` | Path to cover images (set automatically in `apache/exlibris.conf`) |
+| `EXLIBRIS_COVERS_URL` | URL prefix for cover images (e.g. `/exlibris/covers`) |
+| `EXLIBRIS_COVERS_DIR` | Path to cover images on disk (set automatically in `apache/exlibris.conf`) |
 | `EXLIBRIS_SESSION_SECRET` | Optional secret for signed login cookies (recommended in production) |
 
 Downloads are served only from files under configured scan paths (default: `/media/books`). Fetch metadata updates the database and cover images only — EPUB files are not modified.
@@ -269,9 +287,9 @@ ExLibris mounts on a **URL path** (for example `/exlibris/`) on the default Apac
 
 ```bash
 sudo apt install apache2
-sudo a2enmod cgi env
+sudo a2enmod cgi env headers
 sudo systemctl reload apache2
-chmod +x web/cgi-bin/*.py
+chmod +x web/cgi-bin/*.py scripts/shard-covers.py
 ```
 
 #### 2. Prepare the data directory
@@ -293,7 +311,9 @@ sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
-`apache2ctl configtest` should not warn that `ScriptAlias` is overridden by `Alias`. The shipped config lists `ScriptAlias` before `Alias`.
+`apache2ctl configtest` should not warn that `ScriptAlias` is overridden by `Alias`. The shipped config lists `ScriptAlias` before `Alias`, and adds a `covers/` static alias with cache headers.
+
+After upgrading from a version with flat cover files, run `./scripts/shard-covers.py --execute` once, then reload Apache if you updated `exlibris.conf`.
 
 Open **http://localhost/exlibris/**.
 

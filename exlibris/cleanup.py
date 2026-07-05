@@ -12,6 +12,10 @@ from exlibris.book_paths import (
     path_is_under_any_root,
     prune_empty_directories,
 )
+from exlibris.cover_paths import (
+    iter_cover_files,
+    parse_book_id_from_cover,
+)
 from exlibris.file_hash import sha1_file
 
 
@@ -81,12 +85,9 @@ def find_orphan_covers(covers_dir: Path, valid_book_ids: set[int]) -> list[Path]
     if not covers_dir.is_dir():
         return []
     orphans: list[Path] = []
-    for cover_file in covers_dir.iterdir():
-        if not cover_file.is_file():
-            continue
-        try:
-            book_id = int(cover_file.stem)
-        except ValueError:
+    for cover_file in iter_cover_files(covers_dir):
+        book_id = parse_book_id_from_cover(cover_file)
+        if book_id is None:
             orphans.append(cover_file)
             continue
         if book_id not in valid_book_ids:

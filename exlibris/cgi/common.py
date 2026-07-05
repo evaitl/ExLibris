@@ -19,6 +19,12 @@ from exlibris.auth import (
     session_secret,
 )
 from exlibris.cgi.search import build_fts_match, search_words
+from exlibris.cover_paths import (
+    cover_public_segment,
+    iter_cover_files,
+    parse_book_id_from_cover,
+    remove_cover_files,
+)
 
 
 @dataclass(frozen=True)
@@ -122,10 +128,25 @@ def cgi_script(name: str) -> str:
     return f"{prefix}{name}"
 
 
-def cover_href(book_id: int, *, version: str | None = None) -> str:
-    url = f"{cgi_script('cover.py')}?id={book_id}"
+def covers_static_prefix() -> str:
+    env = os.environ.get("EXLIBRIS_COVERS_URL")
+    if env:
+        return env.rstrip("/")
+    static = static_href()
+    if "/static/" in static:
+        return f"{static.split('/static/', 1)[0]}/covers"
+    if static.endswith("/static/style.css"):
+        return static.replace("/static/style.css", "/covers")
+    return "../covers"
+
+
+def cover_href(cover_path: str, *, version: str | None = None) -> str:
+    segment = cover_public_segment(cover_path)
+    if not segment:
+        return ""
+    url = f"{covers_static_prefix()}/{segment}"
     if version:
-        url += f"&v={quote(version, safe='')}"
+        url += f"?v={quote(version, safe='')}"
     return url
 
 
@@ -979,19 +1000,13 @@ class DeleteBookError(Exception):
     pass
 
 
-_COVER_EXTENSIONS = (".jpg", ".jpeg", ".png")
-
-
 def _remove_book_cover_files(book: BookRow) -> None:
     if book.cover_path:
         cover = project_root() / book.cover_path
         if cover.is_file():
             cover.unlink()
     covers_dir = project_root() / "data" / "covers"
-    for ext in _COVER_EXTENSIONS:
-        path = covers_dir / f"{book.id}{ext}"
-        if path.is_file():
-            path.unlink()
+    remove_cover_files(covers_dir, book.id)
 
 
 def delete_book(conn: sqlite3.Connection, book: BookRow) -> None:

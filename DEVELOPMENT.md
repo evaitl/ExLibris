@@ -41,6 +41,7 @@ exlibris/
   fetch_metadata.py ← online metadata fetch, restore embedded cover
   file_hash.py      ← SHA-1 for duplicate detection
   book_paths.py     ← EPUB file walk (stdlib; shared by scanner and cleanup)
+  cover_paths.py    ← sharded cover layout (data/covers/NN/{id}.jpg)
   cleanup.py        ← library file/DB reconciliation helpers
   scanner.py        ← directory walk, per-book commit, dedup by hash
   cgi/
@@ -51,6 +52,7 @@ apache/
   exlibris.conf     ← path-based Apache config (/exlibris/)
 scripts/
   setup-data-dir.sh ← create/migrate data/ directory; chmod entry points
+  shard-covers.py   ← move flat covers into NN/ shards; update cover_path
   scan-library.sh   ← cron: scan then cleanup (backfill hashes, prune dirs)
 web/
   cgi-bin/          ← index, book, cover, download, fetch_metadata, restore_cover,
@@ -68,7 +70,7 @@ web/
 
 1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots; repoints canonical row when duplicate has longer basename and deletes the old shorter file under scan roots.
 2. **Cleanup:** compares scan roots to DB — dedupes by SHA-1 (longest basename), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
-3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination.
+3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination; cover images served as static files under `/exlibris/covers/` (sharded on disk as `data/covers/NN/{id}.jpg`).
 4. **Download:** serves EPUBs only if the path is under a configured scan directory.
 5. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
 
@@ -262,6 +264,8 @@ exlibris cleanup run --execute --force-clean  # hard-delete rows whose file is g
 python scan_books.py -v                    # standalone scanner, verbose
 ./manage_users.py list                     # list accounts (stdlib; no venv)
 ./scripts/setup-data-dir.sh                # create data/; chmod entry-point scripts
+./scripts/shard-covers.py                  # dry-run: shard flat covers into NN/ subdirs
+./scripts/shard-covers.py --execute        # move covers; update books.cover_path
 ./scripts/scan-library.sh                  # manual or cron: scan + cleanup
 ```
 
@@ -348,6 +352,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 
 - **UI:** CGI + `library.js`, `detail.js`, `swipe-nav.js`
 - **Books:** default scan `/media/books`; runtime data in `data/`
+- **Covers:** sharded `data/covers/NN/{id}.jpg`; static Apache alias; `scripts/shard-covers.py` migrates flat layouts
 - **Dedup:** SHA-1 `content_hash`; scanner/cleanup keep longest basename and delete shorter copies; missing files hidden from browse
 - **Library browse:** FTS search, pagination, favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
 - **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)

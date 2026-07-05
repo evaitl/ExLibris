@@ -14,9 +14,15 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from exlibris.config import PROJECT_ROOT
+from exlibris.cover_paths import (
+    cover_dest_base,
+    cover_relative_path,
+    cover_storage_path,
+    remove_cover_files,
+)
 from exlibris.ebook_meta import EbookMeta, EbookMetaError, extract_cover, parse_opf
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
 
 MIN_COVER_BYTES = 500
@@ -386,10 +392,7 @@ COVER_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 def _remove_existing_covers(covers_root: Path, book_id: int) -> None:
     """Remove prior cover files so a new file can be created with only dir write access."""
-    for ext in COVER_EXTENSIONS:
-        path = covers_root / f"{book_id}{ext}"
-        if path.exists():
-            path.unlink()
+    remove_cover_files(covers_root, book_id)
 
 
 def _save_cover(
@@ -401,14 +404,20 @@ def _save_cover(
     covers_root = _resolve_covers_dir(covers_dir)
     try:
         _remove_existing_covers(covers_root, book_id)
-        dest = covers_root / f"{book_id}.jpg"
+        dest = cover_storage_path(covers_root, book_id, ".jpg")
+        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(cover_bytes)
     except OSError as exc:
         raise FetchMetadataError(
             f"Cannot save cover image: {exc}. "
             f"The web server needs write permission on {covers_root}."
         ) from exc
-    return str(dest.relative_to(PROJECT_ROOT))
+    return cover_relative_path(
+        covers_root,
+        book_id,
+        ".jpg",
+        project_root=PROJECT_ROOT,
+    )
 
 
 def restore_embedded_cover(
@@ -422,7 +431,7 @@ def restore_embedded_cover(
     covers_root = _resolve_covers_dir(covers_dir)
     cover_file = extract_cover(
         ebook_path,
-        covers_root / str(book_id),
+        cover_dest_base(covers_root, book_id),
         ebook_meta_cmd=ebook_meta_cmd,
     )
     if cover_file is None:

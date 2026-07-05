@@ -15,6 +15,7 @@ from exlibris.book_paths import (
     path_is_under_any_root,
 )
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
+from exlibris.cover_paths import cover_dest_base
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
 from exlibris.file_hash import sha1_file
@@ -274,7 +275,7 @@ def scan_single_file(
 
         cover_file = extract_cover(
             file_path,
-            covers_root / str(book.id),
+            cover_dest_base(covers_root, book.id),
             ebook_meta_cmd=ebook_meta_cmd,
         )
         if cover_file:
