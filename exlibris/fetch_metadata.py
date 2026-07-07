@@ -14,7 +14,6 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from exlibris.config import PROJECT_ROOT
 from exlibris.cover_paths import (
     cover_dest_base,
     cover_relative_path,
@@ -23,6 +22,7 @@ from exlibris.cover_paths import (
 )
 from exlibris.ebook_meta import EbookMeta, EbookMetaError, extract_cover, parse_opf
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
 
 MIN_COVER_BYTES = 500

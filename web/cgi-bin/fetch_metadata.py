@@ -109,11 +109,10 @@ def main() -> None:
 
             book_file = allowed_book_file(book.file_path)
             if book_file is None:
-                with connect() as read_conn:
-                    current_user, is_favorite = book_detail_context(read_conn, book_id)
+                current_user, is_favorite = book_detail_context(conn, book_id)
                 _html(
                     _detail_response(
-                        read_conn,
+                        conn,
                         book,
                         form,
                         error="Book file is not available for update",
