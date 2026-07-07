@@ -58,6 +58,42 @@ def _resolve_manifest_href(opf_path: str, href: str) -> str:
     return _zip_entry_name("/".join(parts))
 
 
+def _open_epub_zip(path: Path) -> zipfile.ZipFile:
+    """Open an EPUB ZIP, tolerating legacy non-UTF-8 member names."""
+    last_error: Exception | None = None
+    for encoding in ("utf-8", "cp437", "latin-1"):
+        try:
+            return zipfile.ZipFile(path, metadata_encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+        except UnicodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return zipfile.ZipFile(path, metadata_encoding="cp437")
+
+
+def _zip_name_lookup(archive: zipfile.ZipFile) -> dict[str, str]:
+    """Map normalized POSIX paths to the archive's stored member names."""
+    lookup: dict[str, str] = {}
+    for name in archive.namelist():
+        normalized = _zip_entry_name(name)
+        lookup.setdefault(normalized, name)
+        lookup.setdefault(normalized.lower(), name)
+    return lookup
+
+
+def _read_zip_member(
+    archive: zipfile.ZipFile,
+    lookup: dict[str, str],
+    member_path: str,
+) -> bytes:
+    actual = lookup.get(member_path) or lookup.get(member_path.lower())
+    if actual is None:
+        raise KeyError(member_path)
+    return archive.read(actual)
+
+
 def validate_epub_structure(path: Path) -> EpubValidationResult:
     """Check ZIP integrity, container, OPF, manifest, and spine item readability."""
     path = path.expanduser().resolve()
@@ -79,20 +115,21 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
         return result
 
     try:
-        with zipfile.ZipFile(path) as archive:
+        with _open_epub_zip(path) as archive:
             bad_member = archive.testzip()
             if bad_member is not None:
                 result.ok = False
                 result.errors.append(f"corrupt ZIP member: {bad_member}")
                 return result
 
-            names = {_zip_entry_name(name) for name in archive.namelist()}
+            lookup = _zip_name_lookup(archive)
+            names = set(lookup.keys())
 
             if MIMETYPE_PATH in names:
                 try:
-                    mimetype = archive.read(MIMETYPE_PATH).decode(
-                        "utf-8", errors="replace"
-                    ).strip()
+                    mimetype = _read_zip_member(
+                        archive, lookup, MIMETYPE_PATH
+                    ).decode("utf-8", errors="replace").strip()
                     if mimetype != "application/epub+zip":
                         result.warnings.append(
                             f"unexpected mimetype: {mimetype!r}"
@@ -108,7 +145,7 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
                 return result
 
             try:
-                container_xml = archive.read(CONTAINER_PATH)
+                container_xml = _read_zip_member(archive, lookup, CONTAINER_PATH)
             except KeyError:
                 result.ok = False
                 result.errors.append("could not read container.xml")
@@ -137,7 +174,7 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
                 return result
 
             try:
-                opf_xml = archive.read(opf_path)
+                opf_xml = _read_zip_member(archive, lookup, opf_path)
             except KeyError:
                 result.ok = False
                 result.errors.append(f"could not read OPF: {opf_path}")
@@ -182,7 +219,7 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
                     result.errors.append(f"spine content missing from archive: {member}")
                     continue
                 try:
-                    content = archive.read(member)
+                    content = _read_zip_member(archive, lookup, member)
                 except KeyError:
                     result.ok = False
                     result.errors.append(f"could not read spine item: {member}")
@@ -210,6 +247,9 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
     except zipfile.BadZipFile:
         result.ok = False
         result.errors.append("bad ZIP archive")
+    except UnicodeDecodeError as exc:
+        result.ok = False
+        result.errors.append(f"unreadable ZIP member names: {exc}")
     except OSError as exc:
         result.ok = False
         result.errors.append(str(exc))

@@ -6,7 +6,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from exlibris.epub_validate import validate_epub_structure
+from exlibris.epub_validate import _open_epub_zip, validate_epub_structure
 
 
 def _write_minimal_epub(path: Path, *, include_spine: bool = True) -> None:
@@ -43,6 +43,31 @@ def _write_minimal_epub(path: Path, *, include_spine: bool = True) -> None:
         archive.writestr("META-INF/container.xml", container)
         archive.writestr("OEBPS/content.opf", opf)
         archive.writestr("OEBPS/chapter1.xhtml", chapter)
+
+
+def test_open_epub_zip_falls_back_when_utf8_decode_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "legacy.epub"
+    _write_minimal_epub(path)
+    calls: list[str] = []
+    real_zipfile = zipfile.ZipFile
+
+    def fake_zipfile(
+        file: Path,
+        metadata_encoding: str = "utf-8",
+    ) -> zipfile.ZipFile:
+        calls.append(metadata_encoding)
+        if metadata_encoding == "utf-8":
+            raise UnicodeDecodeError("utf-8", b"\xbf", 2, 3, "invalid start byte")
+        return real_zipfile(file, metadata_encoding=metadata_encoding)
+
+    monkeypatch.setattr("exlibris.epub_validate.zipfile.ZipFile", fake_zipfile)
+
+    with _open_epub_zip(path) as archive:
+        assert "META-INF/container.xml" in archive.namelist()
+
+    assert calls[:2] == ["utf-8", "cp437"]
 
 
 def test_validate_epub_structure_accepts_minimal_epub() -> None:
