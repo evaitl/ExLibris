@@ -18,6 +18,7 @@ from exlibris.cleanup import (
     find_orphan_covers,
     load_books,
     purge_book,
+    sanitize_book_filenames,
 )
 from exlibris.book_paths import prune_empty_directories
 
@@ -283,6 +284,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                 verb = "backfilled" if execute else "would backfill"
                 print(f"{verb} {updated} content hash(es)")
 
+        sanitized, sanitize_errors = sanitize_book_filenames(
+            conn,
+            scan_roots,
+            execute=execute,
+        )
+        result.filenames_sanitized = sanitized
+        result.errors.extend(sanitize_errors)
+        if not args.quiet and sanitized:
+            verb = "sanitized" if execute else "would sanitize"
+            print(f"{verb} {sanitized} filename(s)")
+
         report = audit_library(conn, scan_roots, covers_dir=covers_dir)
 
         if not args.quiet:
@@ -371,6 +383,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{result.rows_updated} row(s) updated, "
             f"{result.rows_indexed} row(s) indexed, "
             f"{result.hashes_backfilled} hash(es) backfilled, "
+            f"{result.filenames_sanitized} filename(s) sanitized, "
             f"{result.dirs_pruned} empty dir(s) pruned, "
             f"{result.rows_purged} row(s) purged, "
             f"{result.covers_removed} cover(s) removed"

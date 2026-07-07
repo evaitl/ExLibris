@@ -21,6 +21,7 @@ from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
 from exlibris.file_hash import sha1_file
 from exlibris.library_cache import refresh_library_stats
+from exlibris.filenames import display_name, display_path, display_text, ensure_safe_filename
 from exlibris.models import Book
 
 ScanProgressCallback = Callable[[int, int, Path, str], None]
@@ -179,7 +180,7 @@ def _try_repoint_duplicate(
 
 def print_scan_progress(current: int, total: int, path: Path, status: str) -> None:
     width = len(str(total))
-    print(f"[{current:>{width}}/{total}] {status}: {path.name}", flush=True)
+    print(f"[{current:>{width}}/{total}] {status}: {display_name(path)}", flush=True)
 
 
 @dataclass
@@ -203,7 +204,7 @@ def scan_single_file(
     if now is None:
         now = datetime.now(timezone.utc)
     covers_root = resolve_covers_dir(covers_dir)
-    file_path = file_path.resolve()
+    file_path = ensure_safe_filename(file_path.resolve())
 
     try:
         stat = file_path.stat()
@@ -248,7 +249,7 @@ def scan_single_file(
         meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
         if meta.errors and verbose:
             for err in meta.errors:
-                print(f"{file_path}: {err}", flush=True)
+                print(f"{display_path(file_path)}: {err}", flush=True)
 
         book = upsert_book(
             session,
@@ -318,7 +319,8 @@ def scan_paths(
 
     for index, file_path in enumerate(book_files, start=1):
         stats.scanned += 1
-        file_path_str = str(file_path.resolve())
+        file_path = ensure_safe_filename(file_path.resolve())
+        file_path_str = str(file_path)
         seen_paths.add(file_path_str)
         try:
             result = scan_single_file(
@@ -335,34 +337,34 @@ def scan_paths(
                 if on_progress:
                     on_progress(index, total, file_path, "unchanged")
                 elif verbose:
-                    print(f"unchanged: {file_path.name}", flush=True)
+                    print(f"unchanged: {display_name(file_path)}", flush=True)
             elif result.status == "duplicate":
                 stats.skipped += 1
                 if on_progress:
                     on_progress(index, total, file_path, "duplicate")
                 elif verbose:
-                    print(f"duplicate: {file_path.name}", flush=True)
+                    print(f"duplicate: {display_name(file_path)}", flush=True)
             elif result.status == "repointed":
                 stats.added_or_updated += 1
                 stats.files_deleted += result.files_deleted
                 if on_progress:
                     on_progress(index, total, file_path, "repointed")
                 elif verbose and result.book is not None:
-                    title = result.book.title or result.book.file_name
-                    print(f"repointed: {title} -> {file_path.name}", flush=True)
+                    title = display_text(result.book.title or result.book.file_name)
+                    print(f"repointed: {title} -> {display_name(file_path)}", flush=True)
             elif result.status == "indexed":
                 stats.added_or_updated += 1
                 if on_progress:
                     on_progress(index, total, file_path, "indexed")
                 elif verbose and result.book is not None:
-                    title = result.book.title or result.book.file_name
+                    title = display_text(result.book.title or result.book.file_name)
                     print(f"indexed: {title}", flush=True)
         except EbookMetaError as exc:
-            stats.errors.append(f"{file_path}: {exc}")
+            stats.errors.append(f"{display_path(file_path)}: {exc}")
             if on_progress:
                 on_progress(index, total, file_path, "error")
         except Exception as exc:
-            stats.errors.append(f"{file_path}: {exc}")
+            stats.errors.append(f"{display_path(file_path)}: {exc}")
             if on_progress:
                 on_progress(index, total, file_path, "error")
 

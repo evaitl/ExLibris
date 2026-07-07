@@ -17,6 +17,12 @@ from exlibris.cover_paths import (
     parse_book_id_from_cover,
 )
 from exlibris.library_cache import refresh_library_stats
+from exlibris.filenames import (
+    display_path,
+    filename_needs_sanitization,
+    sanitize_filename,
+    unique_target_path,
+)
 from exlibris.file_hash import sha1_file
 
 
@@ -58,6 +64,7 @@ class CleanupResult:
     rows_purged: int = 0
     covers_removed: int = 0
     hashes_backfilled: int = 0
+    filenames_sanitized: int = 0
     dirs_pruned: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -263,6 +270,55 @@ def apply_duplicate_group(
             files_deleted += 1
 
     return rows_updated, files_deleted, repointed_book_id
+
+
+def sanitize_book_filenames(
+    conn: sqlite3.Connection,
+    scan_roots: list[Path],
+    *,
+    execute: bool,
+) -> tuple[int, list[str]]:
+    """Rename unsafe on-disk filenames and update indexed rows."""
+    errors: list[str] = []
+    updated = 0
+
+    for book in load_books(conn):
+        path = Path(book.file_path)
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if not path_is_under_any_root(resolved, scan_roots):
+            continue
+
+        sanitized_name = sanitize_filename(path.name)
+        target = resolved
+        if sanitized_name != path.name:
+            candidate = unique_target_path(resolved.parent, sanitized_name)
+            if candidate.exists() and candidate.resolve() != resolved:
+                errors.append(
+                    f"id={book.id}: cannot rename to {display_path(candidate)}, exists"
+                )
+                continue
+            target = candidate.resolve()
+            if execute:
+                try:
+                    resolved.rename(target)
+                except OSError as exc:
+                    errors.append(f"id={book.id}: {exc}")
+                    continue
+
+        needs_db_update = (
+            str(target) != book.file_path
+            or target.name != book.file_name
+            or filename_needs_sanitization(book.file_name)
+        )
+        if not needs_db_update:
+            continue
+        if execute:
+            update_book_path(conn, book.id, target)
+        updated += 1
+
+    return updated, errors
 
 
 def backfill_content_hashes(
