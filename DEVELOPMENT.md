@@ -42,6 +42,8 @@ exlibris/
   file_hash.py      ← SHA-1 for duplicate detection
   book_paths.py     ← EPUB file walk (stdlib; shared by scanner and cleanup)
   cover_paths.py    ← sharded cover layout (data/covers/NN/{id}.jpg)
+  filenames.py      ← safe basename sanitization; metadata-based rename helpers
+  epub_validate.py  ← EPUB ZIP/OPF/spine validation (stdlib; optional Calibre deep check)
   cleanup.py        ← library file/DB reconciliation helpers
   scanner.py        ← directory walk, per-book commit, dedup by hash
   cgi/
@@ -53,6 +55,7 @@ apache/
 scripts/
   setup-data-dir.sh ← create/migrate data/ directory; chmod entry points
   shard-covers.py   ← move flat covers into NN/ shards; update cover_path
+  rename-short-files.py ← thin wrapper around cleanup filename sanitization
   scan-library.sh   ← cron: scan then cleanup (backfill hashes, prune dirs)
 web/
   cgi-bin/          ← index, book, cover, download, fetch_metadata, restore_cover,
@@ -69,7 +72,7 @@ web/
 ### Data flow
 
 1. **Scan:** walks configured paths, skips unchanged files by size/mtime, SHA-1 when needed, calls `ebook-meta`, upserts `data/library.db`, marks missing files when absent from scan roots; repoints canonical row when duplicate has longer basename and deletes the old shorter file under scan roots.
-2. **Cleanup:** compares scan roots to DB — dedupes by SHA-1 (longest basename), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
+2. **Cleanup:** compares scan roots to DB — sanitizes filenames, dedupes by SHA-1 (longest basename), optionally validates EPUB structure and removes corrupt files (`--validate-epubs`), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
 3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination; cover images served as static files under `/exlibris/covers/` (sharded on disk as `data/covers/NN/{id}.jpg`).
 4. **Download:** serves EPUBs only if the path is under a configured scan directory.
 5. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
@@ -260,6 +263,8 @@ exlibris cleanup audit                     # read-only file vs DB report
 exlibris cleanup run --execute             # dedupe, index new EPUBs (dry-run without --execute)
 exlibris cleanup run --execute \
   --backfill-hashes --prune-empty-dirs     # also fill NULL content_hash, prune empty dirs
+exlibris cleanup run --execute --validate-epubs  # remove corrupt EPUBs + DB rows (destructive)
+exlibris cleanup audit --validate-epubs    # report invalid EPUBs only (read-only)
 exlibris cleanup run --execute --force-clean  # hard-delete rows whose file is gone
 python scan_books.py -v                    # standalone scanner, verbose
 ./manage_users.py list                     # list accounts (stdlib; no venv)
@@ -283,7 +288,10 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 
 | Phase | Behavior |
 |-------|----------|
-| Audit | Unindexed files, duplicate groups, new files, absent rows, orphan covers, NULL hashes, out-of-root paths |
+| Audit | Unindexed files, duplicate groups, new files, absent rows, orphan covers, NULL hashes, out-of-root paths, filename fixes, invalid EPUBs (with `--validate-epubs`) |
+| Sanitize | Every `run`: strip unsafe characters; rename stems &lt; 10 chars to `{title} - {authors}-({publisher}).epub`; update `file_path` / `file_name` |
+| Validate | `--validate-epubs`: ZIP + container + OPF spine checks (stdlib); `--validate-epubs-deep` also runs `ebook-meta` |
+| Remove invalid | With `run --execute --validate-epubs`: delete bad files under scan roots; `purge_book` + cover removal for indexed rows |
 | Dedupe | SHA-1 match → keep longest basename; delete shorter copies; repoint DB (no Calibre) |
 | Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover) |
 | Backfill | `--backfill-hashes`: SHA-1 for rows with `content_hash IS NULL` |

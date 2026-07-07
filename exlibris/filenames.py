@@ -69,10 +69,87 @@ def unique_target_path(directory: Path, file_name: str) -> Path:
     stem = Path(file_name).stem
     suffix = Path(file_name).suffix
     for index in range(2, 10_000):
-        candidate = directory / f"{stem}.{index}{suffix}"
+        candidate = directory / f"{stem} ({index}){suffix}"
         if not candidate.exists():
             return candidate
     raise OSError(f"could not find unused filename in {directory}")
+
+
+def _clean_metadata_field(value: object | None, *, fallback: str) -> str:
+    if value is None:
+        return fallback
+    text = re.sub(r"\s+", " ", str(value).strip())
+    return text or fallback
+
+
+def has_short_basename(file_name: str, *, max_stem_len: int = 10) -> bool:
+    path = Path(file_name)
+    if path.suffix.lower() != ".epub":
+        return False
+    return len(path.stem) < max_stem_len
+
+
+def build_metadata_filename(
+    *,
+    title: str | None,
+    authors: str | None,
+    publisher: str | None,
+    fallback_stem: str,
+    max_stem_len: int | None = 180,
+) -> str:
+    """Build '{title} - {authors}-({publisher}).epub' with safe characters."""
+    title_text = _clean_metadata_field(title, fallback=fallback_stem)
+    authors_text = _clean_metadata_field(authors, fallback="Unknown Author")
+    publisher_text = _clean_metadata_field(publisher, fallback="Unknown Publisher")
+    raw = f"{title_text} - {authors_text}-({publisher_text}).epub"
+    return sanitize_filename(raw, max_stem_len=max_stem_len)
+
+
+def target_filename(
+    file_name: str,
+    *,
+    title: str | None = None,
+    authors: str | None = None,
+    publisher: str | None = None,
+    max_short_stem_len: int = 10,
+    max_stem_len: int | None = 180,
+) -> str:
+    """Desired on-disk filename after sanitization and optional metadata rename."""
+    path = Path(file_name)
+    if path.suffix.lower() != ".epub":
+        return sanitize_filename(file_name, max_stem_len=max_stem_len)
+
+    if has_short_basename(file_name, max_stem_len=max_short_stem_len):
+        candidate = build_metadata_filename(
+            title=title,
+            authors=authors,
+            publisher=publisher,
+            fallback_stem=path.stem,
+            max_stem_len=max_stem_len,
+        )
+    else:
+        candidate = file_name
+    return sanitize_filename(candidate, max_stem_len=max_stem_len)
+
+
+def filename_needs_update(
+    file_name: str,
+    *,
+    title: str | None = None,
+    authors: str | None = None,
+    publisher: str | None = None,
+    max_short_stem_len: int = 10,
+) -> bool:
+    return (
+        target_filename(
+            file_name,
+            title=title,
+            authors=authors,
+            publisher=publisher,
+            max_short_stem_len=max_short_stem_len,
+        )
+        != file_name
+    )
 
 
 def ensure_safe_filename(file_path: Path) -> Path:

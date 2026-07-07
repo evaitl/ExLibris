@@ -13,11 +13,16 @@ from exlibris.cleanup import (
     AuditReport,
     CleanupResult,
     apply_duplicate_group,
+    audit_epub_integrity,
     audit_library,
     backfill_content_hashes,
+    build_path_to_book_id,
+    collect_epub_paths_for_validation,
     find_orphan_covers,
+    list_filename_fixes,
     load_books,
     purge_book,
+    remove_invalid_epubs,
     sanitize_book_filenames,
 )
 from exlibris.book_paths import prune_empty_directories
@@ -174,17 +179,49 @@ def print_audit(report: AuditReport, *, quiet: bool) -> None:
         [f"id={book.id}  {book.file_path}" for book in report.out_of_root_books],
         quiet=quiet,
     )
+    _print_section("Filename fixes", report.filename_fixes, quiet=quiet)
+    _print_section("Invalid EPUBs", report.invalid_epubs, quiet=quiet)
     if report.errors:
         _print_section("Errors", report.errors, quiet=False)
 
 
+def _validate_epubs(
+    conn: sqlite3.Connection,
+    scan_roots: list[Path],
+    *,
+    deep: bool,
+    ebook_meta: str | None,
+) -> tuple[list[str], list[str]]:
+    paths = collect_epub_paths_for_validation(conn, scan_roots)
+    invalid, errors = audit_epub_integrity(
+        paths,
+        path_to_book_id=build_path_to_book_id(conn),
+        deep=deep,
+        ebook_meta_cmd=ebook_meta,
+    )
+    return [item.display_line() for item in invalid], errors
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
+    if args.validate_epubs_deep and not args.validate_epubs:
+        print("error: --validate-epubs-deep requires --validate-epubs", file=sys.stderr)
+        return 1
+
     db_path = _database_path(args)
     scan_roots = _scan_roots(args)
     covers_dir = _covers_dir(args)
 
     with _connect(db_path) as conn:
         report = audit_library(conn, scan_roots, covers_dir=covers_dir)
+        if args.validate_epubs:
+            invalid, validate_errors = _validate_epubs(
+                conn,
+                scan_roots,
+                deep=args.validate_epubs_deep,
+                ebook_meta=args.ebook_meta,
+            )
+            report.invalid_epubs = invalid
+            report.errors.extend(validate_errors)
 
     if not args.quiet:
         print(f"Database: {db_path}")
@@ -260,6 +297,10 @@ def _index_new_files(
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if args.validate_epubs_deep and not args.validate_epubs:
+        print("error: --validate-epubs-deep requires --validate-epubs", file=sys.stderr)
+        return 1
+
     db_path = _database_path(args)
     scan_roots = _scan_roots(args)
     covers_dir = _covers_dir(args)
@@ -294,14 +335,56 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not args.quiet and sanitized:
             verb = "sanitized" if execute else "would sanitize"
             print(f"{verb} {sanitized} filename(s)")
+        elif not args.quiet and not execute:
+            fixes = list_filename_fixes(conn, scan_roots)
+            if fixes and args.verbose:
+                for line in fixes:
+                    print(f"would rename: {line}")
 
         report = audit_library(conn, scan_roots, covers_dir=covers_dir)
+
+        invalid_items = []
+        if args.validate_epubs:
+            paths = collect_epub_paths_for_validation(conn, scan_roots)
+            invalid_items, validate_errors = audit_epub_integrity(
+                paths,
+                path_to_book_id=build_path_to_book_id(conn),
+                deep=args.validate_epubs_deep,
+                ebook_meta_cmd=args.ebook_meta,
+            )
+            report.invalid_epubs = [item.display_line() for item in invalid_items]
+            result.invalid_epubs = len(invalid_items)
+            result.errors.extend(validate_errors)
 
         if not args.quiet:
             mode = "EXECUTE" if execute else "DRY-RUN"
             print(f"=== {mode} ===")
             print(f"Database: {db_path}")
             print_audit(report, quiet=args.quiet)
+
+        if args.validate_epubs and invalid_items:
+            files_deleted, rows_purged, covers_removed, remove_errors = (
+                remove_invalid_epubs(
+                    conn,
+                    invalid_items,
+                    scan_roots=scan_roots,
+                    covers_dir=covers_dir,
+                    execute=execute,
+                )
+            )
+            result.files_deleted += files_deleted
+            result.rows_purged += rows_purged
+            result.covers_removed += covers_removed
+            result.errors.extend(remove_errors)
+            if not args.quiet:
+                if execute:
+                    print(
+                        f"removed {len(invalid_items)} invalid EPUB(s): "
+                        f"{files_deleted} file(s), {rows_purged} row(s), "
+                        f"{covers_removed} cover set(s)"
+                    )
+                else:
+                    print(f"would remove {len(invalid_items)} invalid EPUB(s)")
 
         repointed_ids: set[int] = set()
 
@@ -384,6 +467,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{result.rows_indexed} row(s) indexed, "
             f"{result.hashes_backfilled} hash(es) backfilled, "
             f"{result.filenames_sanitized} filename(s) sanitized, "
+            f"{result.invalid_epubs} invalid EPUB(s), "
             f"{result.dirs_pruned} empty dir(s) pruned, "
             f"{result.rows_purged} row(s) purged, "
             f"{result.covers_removed} cover(s) removed"
@@ -416,6 +500,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Mention rows that would be purged (still read-only)",
     )
     audit_parser.add_argument(
+        "--validate-epubs",
+        action="store_true",
+        help="Check EPUB ZIP/OPF/spine structure (and readability of spine HTML)",
+    )
+    audit_parser.add_argument(
+        "--validate-epubs-deep",
+        action="store_true",
+        help="With --validate-epubs, also require Calibre ebook-meta to open the file",
+    )
+    audit_parser.add_argument(
+        "--ebook-meta",
+        type=str,
+        default=None,
+        help="Path to Calibre ebook-meta (for --validate-epubs-deep)",
+    )
+    audit_parser.add_argument(
         "--execute",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -446,6 +546,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--prune-empty-dirs",
         action="store_true",
         help="Remove empty directories under scan roots",
+    )
+    run_parser.add_argument(
+        "--validate-epubs",
+        action="store_true",
+        help="Check EPUB ZIP/OPF/spine structure (and readability of spine HTML)",
+    )
+    run_parser.add_argument(
+        "--validate-epubs-deep",
+        action="store_true",
+        help="With --validate-epubs, also require Calibre ebook-meta to open the file",
+    )
+    run_parser.add_argument(
+        "--ebook-meta",
+        type=str,
+        default=None,
+        help="Path to Calibre ebook-meta (for --validate-epubs-deep)",
     )
     run_parser.set_defaults(func=cmd_run)
 

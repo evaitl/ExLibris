@@ -150,7 +150,7 @@ Add one line (replace `/path/to/ExLibris` with your clone location):
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
 
-Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip unchanged files when size and mtime match, so a nightly run is usually quick unless many new books were added. Cleanup after each scan deduplicates on-disk copies, indexes new EPUBs, backfills missing SHA-1 hashes, and prunes empty directories.
+Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip unchanged files when size and mtime match, so a nightly run is usually quick unless many new books were added. Cleanup after each scan deduplicates on-disk copies, sanitizes filenames, indexes new EPUBs, backfills missing SHA-1 hashes, and prunes empty directories. EPUB validation/removal (`--validate-epubs`) is not in the default cron job — run it manually when you want to purge corrupt files.
 
 Check recent scan output:
 
@@ -220,21 +220,30 @@ Incremental scans are quick when nothing changed.
 | Dry-run | `./cleanup_library.py run` |
 | Apply dedupe + index new EPUBs | `./cleanup_library.py run --execute` |
 | Also backfill SHA-1, prune empty dirs | add `--backfill-hashes --prune-empty-dirs` |
+| Sanitize filenames + update DB paths | included in `run` (dry-run or `--execute`) |
+| Validate EPUB structure / readability | add `--validate-epubs` (optional `--validate-epubs-deep`) |
+| Remove corrupt EPUBs + DB rows | `run --execute --validate-epubs` (destructive; dry-run first) |
 | Hard-delete rows with no file on disk | add `--force-clean` (requires `--execute`) |
 
 ```bash
 ./cleanup_library.py audit
+./cleanup_library.py audit --validate-epubs
 ./cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs
+./cleanup_library.py run --execute --validate-epubs   # destructive: removes bad EPUBs
 exlibris cleanup run --execute --backfill-hashes --prune-empty-dirs
 ```
 
-Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` requires `--execute` and is destructive (removes DB rows and cascades favorites).
+Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` and `--validate-epubs` with `--execute` are destructive (remove files and/or DB rows). Run a dry-run first on large libraries.
 
 **Dedup:** unindexed files with the same SHA-1 as a database row keep the **longest basename**; shorter copies are deleted and the row is repointed. The scanner applies the same rule during `exlibris scan` (repoint + delete old file).
 
 **Moved files:** same SHA-1 at a new path updates only `file_path`, `file_name`, size, and mtime — Calibre is not run again (also handled during `exlibris scan` when the canonical path is missing or shorter).
 
 **New EPUBs:** files on disk with no hash match are indexed via the same logic as `exlibris scan` (needs venv + Calibre).
+
+**Filenames:** `run` renames unsafe characters and very short basenames (stem &lt; 10 characters) to `{title} - {authors}-({publisher}).epub`, then updates `file_path` and `file_name` in the database. `audit` lists planned renames under **Filename fixes**.
+
+**EPUB validation:** `--validate-epubs` checks ZIP integrity, `container.xml`, OPF manifest/spine, and parses spine HTML/XHTML. With `run --execute`, invalid files are deleted from disk and indexed rows (plus cover images) are purged from the database. Dry-run lists them under **Invalid EPUBs** and reports what would be removed. Add `--validate-epubs-deep` to also require Calibre `ebook-meta` to open each file.
 
 `audit` uses system Python only; `run --execute` needs the venv for indexing new files.
 

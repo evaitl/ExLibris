@@ -112,6 +112,9 @@ def cleanup_audit(
     quiet: bool = typer.Option(False, "--quiet", "-q"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     force_clean: bool = typer.Option(False, "--force-clean"),
+    validate_epubs: bool = typer.Option(False, "--validate-epubs"),
+    validate_epubs_deep: bool = typer.Option(False, "--validate-epubs-deep"),
+    ebook_meta: str | None = typer.Option(None, "--ebook-meta"),
 ) -> None:
     """Report unindexed, duplicate, absent, and orphan items."""
     _run_cleanup(
@@ -122,6 +125,9 @@ def cleanup_audit(
         quiet=quiet,
         verbose=verbose,
         force_clean=force_clean,
+        validate_epubs=validate_epubs,
+        validate_epubs_deep=validate_epubs_deep,
+        ebook_meta=ebook_meta,
     )
 
 
@@ -136,6 +142,9 @@ def cleanup_run(
     force_clean: bool = typer.Option(False, "--force-clean"),
     backfill_hashes: bool = typer.Option(False, "--backfill-hashes"),
     prune_empty_dirs: bool = typer.Option(False, "--prune-empty-dirs"),
+    validate_epubs: bool = typer.Option(False, "--validate-epubs"),
+    validate_epubs_deep: bool = typer.Option(False, "--validate-epubs-deep"),
+    ebook_meta: str | None = typer.Option(None, "--ebook-meta"),
 ) -> None:
     """Deduplicate files, index new EPUBs, optionally purge absent rows."""
     _run_cleanup(
@@ -149,6 +158,9 @@ def cleanup_run(
         force_clean=force_clean,
         backfill_hashes=backfill_hashes,
         prune_empty_dirs=prune_empty_dirs,
+        validate_epubs=validate_epubs,
+        validate_epubs_deep=validate_epubs_deep,
+        ebook_meta=ebook_meta,
     )
 
 

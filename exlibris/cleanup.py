@@ -15,12 +15,15 @@ from exlibris.book_paths import (
 from exlibris.cover_paths import (
     iter_cover_files,
     parse_book_id_from_cover,
+    remove_cover_files,
 )
 from exlibris.library_cache import refresh_library_stats
+from exlibris.epub_validate import validate_epub
+from exlibris.ebook_meta import EbookMetaError
 from exlibris.filenames import (
     display_path,
-    filename_needs_sanitization,
-    sanitize_filename,
+    filename_needs_update,
+    target_filename,
     unique_target_path,
 )
 from exlibris.file_hash import sha1_file
@@ -44,6 +47,17 @@ class DuplicateGroup:
     repoint_only: bool = False
 
 
+@dataclass(frozen=True)
+class InvalidEpub:
+    path: Path
+    book_id: int | None
+    detail: str
+
+    def display_line(self) -> str:
+        prefix = f"id={self.book_id}  " if self.book_id is not None else ""
+        return f"{prefix}{display_path(self.path)}: {self.detail}"
+
+
 @dataclass
 class AuditReport:
     unindexed_files: list[Path] = field(default_factory=list)
@@ -53,6 +67,8 @@ class AuditReport:
     orphan_covers: list[Path] = field(default_factory=list)
     null_hash_books: list[BookRecord] = field(default_factory=list)
     out_of_root_books: list[BookRecord] = field(default_factory=list)
+    filename_fixes: list[str] = field(default_factory=list)
+    invalid_epubs: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -65,6 +81,7 @@ class CleanupResult:
     covers_removed: int = 0
     hashes_backfilled: int = 0
     filenames_sanitized: int = 0
+    invalid_epubs: int = 0
     dirs_pruned: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -196,6 +213,7 @@ def audit_library(
 
     valid_ids = {book.id for book in books}
     report.orphan_covers = find_orphan_covers(covers_dir, valid_ids)
+    report.filename_fixes = list_filename_fixes(conn, scan_roots)
     return report
 
 
@@ -272,31 +290,117 @@ def apply_duplicate_group(
     return rows_updated, files_deleted, repointed_book_id
 
 
+def list_filename_fixes(
+    conn: sqlite3.Connection,
+    scan_roots: list[Path],
+    *,
+    max_short_stem_len: int = 10,
+) -> list[str]:
+    fixes: list[str] = []
+    for row in _filename_fixup_rows(conn):
+        path = Path(row.file_path)
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if not path_is_under_any_root(resolved, scan_roots):
+            continue
+        desired = target_filename(
+            path.name,
+            title=row.title,
+            authors=row.authors,
+            publisher=row.publisher,
+            max_short_stem_len=max_short_stem_len,
+        )
+        if (
+            desired == path.name
+            and str(resolved) == row.file_path
+            and row.file_name == desired
+        ):
+            continue
+        fixes.append(
+            f"id={row.id}  {display_path(resolved)} -> {desired}"
+        )
+    return fixes
+
+
+@dataclass(frozen=True)
+class _FilenameRow:
+    id: int
+    file_path: str
+    file_name: str
+    title: str | None
+    authors: str | None
+    publisher: str | None
+
+
+def _filename_fixup_rows(conn: sqlite3.Connection) -> list[_FilenameRow]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, file_path, file_name, title, authors, publisher
+            FROM books
+            WHERE is_missing = 0
+            ORDER BY id
+            """
+        ).fetchall()
+        return [
+            _FilenameRow(
+                id=int(row["id"]),
+                file_path=str(row["file_path"]),
+                file_name=str(row["file_name"]),
+                title=row["title"],
+                authors=row["authors"],
+                publisher=row["publisher"],
+            )
+            for row in rows
+        ]
+    except sqlite3.OperationalError:
+        return [
+            _FilenameRow(
+                id=book.id,
+                file_path=book.file_path,
+                file_name=book.file_name,
+                title=None,
+                authors=None,
+                publisher=None,
+            )
+            for book in load_books(conn)
+            if not book.is_missing
+        ]
+
+
 def sanitize_book_filenames(
     conn: sqlite3.Connection,
     scan_roots: list[Path],
     *,
     execute: bool,
+    max_short_stem_len: int = 10,
 ) -> tuple[int, list[str]]:
-    """Rename unsafe on-disk filenames and update indexed rows."""
+    """Rename unsafe or very short basenames and update indexed rows."""
     errors: list[str] = []
     updated = 0
 
-    for book in load_books(conn):
-        path = Path(book.file_path)
+    for row in _filename_fixup_rows(conn):
+        path = Path(row.file_path)
         if not path.is_file():
             continue
         resolved = path.resolve()
         if not path_is_under_any_root(resolved, scan_roots):
             continue
 
-        sanitized_name = sanitize_filename(path.name)
+        desired_name = target_filename(
+            path.name,
+            title=row.title,
+            authors=row.authors,
+            publisher=row.publisher,
+            max_short_stem_len=max_short_stem_len,
+        )
         target = resolved
-        if sanitized_name != path.name:
-            candidate = unique_target_path(resolved.parent, sanitized_name)
+        if desired_name != path.name:
+            candidate = unique_target_path(resolved.parent, desired_name)
             if candidate.exists() and candidate.resolve() != resolved:
                 errors.append(
-                    f"id={book.id}: cannot rename to {display_path(candidate)}, exists"
+                    f"id={row.id}: cannot rename to {display_path(candidate)}, exists"
                 )
                 continue
             target = candidate.resolve()
@@ -304,21 +408,157 @@ def sanitize_book_filenames(
                 try:
                     resolved.rename(target)
                 except OSError as exc:
-                    errors.append(f"id={book.id}: {exc}")
+                    errors.append(f"id={row.id}: {exc}")
                     continue
 
         needs_db_update = (
-            str(target) != book.file_path
-            or target.name != book.file_name
-            or filename_needs_sanitization(book.file_name)
+            str(target) != row.file_path
+            or target.name != row.file_name
+            or filename_needs_update(
+                row.file_name,
+                title=row.title,
+                authors=row.authors,
+                publisher=row.publisher,
+                max_short_stem_len=max_short_stem_len,
+            )
         )
         if not needs_db_update:
             continue
         if execute:
-            update_book_path(conn, book.id, target)
+            update_book_path(conn, row.id, target)
         updated += 1
 
     return updated, errors
+
+
+def audit_epub_integrity(
+    paths: list[Path],
+    *,
+    path_to_book_id: dict[str, int] | None = None,
+    deep: bool = False,
+    ebook_meta_cmd: str | None = None,
+) -> tuple[list[InvalidEpub], list[str]]:
+    """Validate EPUB files on disk. Returns (invalid items, errors)."""
+    path_to_book_id = path_to_book_id or {}
+    invalid: list[InvalidEpub] = []
+    errors: list[str] = []
+    for path in sorted(paths, key=lambda item: str(item).lower()):
+        try:
+            result = validate_epub(
+                path,
+                deep=deep,
+                ebook_meta_cmd=ebook_meta_cmd,
+            )
+        except EbookMetaError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        if not result.ok:
+            detail = "; ".join(result.errors) if result.errors else "invalid"
+            invalid.append(
+                InvalidEpub(
+                    path=path.resolve(),
+                    book_id=path_to_book_id.get(str(path.resolve())),
+                    detail=detail,
+                )
+            )
+    return invalid, errors
+
+
+def build_path_to_book_id(conn: sqlite3.Connection) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for row in conn.execute("SELECT id, file_path FROM books"):
+        try:
+            mapping[str(Path(str(row["file_path"])).resolve())] = int(row["id"])
+        except (OSError, ValueError, TypeError):
+            continue
+    return mapping
+
+
+def remove_invalid_epubs(
+    conn: sqlite3.Connection,
+    invalid: list[InvalidEpub],
+    *,
+    scan_roots: list[Path],
+    covers_dir: Path,
+    execute: bool,
+) -> tuple[int, int, int, list[str]]:
+    """Delete invalid EPUB files and purge matching database rows.
+
+    Returns (files_deleted, rows_purged, covers_removed, errors).
+    """
+    files_deleted = 0
+    rows_purged = 0
+    covers_removed = 0
+    errors: list[str] = []
+    seen_paths: set[str] = set()
+
+    for item in invalid:
+        path = item.path.resolve()
+        key = str(path)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+
+        if path.is_file():
+            if not path_is_under_any_root(path, scan_roots):
+                errors.append(f"refusing to delete outside scan roots: {path}")
+                continue
+            if execute:
+                try:
+                    delete_file_under_roots(path, scan_roots)
+                    files_deleted += 1
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+                    continue
+            else:
+                files_deleted += 1
+
+        if item.book_id is None:
+            continue
+
+        if execute:
+            if covers_dir.is_dir():
+                remove_cover_files(covers_dir, item.book_id)
+                covers_removed += 1
+            purge_book(conn, item.book_id)
+            rows_purged += 1
+        else:
+            rows_purged += 1
+            if covers_dir.is_dir():
+                covers_removed += 1
+
+    return files_deleted, rows_purged, covers_removed, errors
+
+
+def collect_epub_paths_for_validation(
+    conn: sqlite3.Connection,
+    scan_roots: list[Path],
+) -> list[Path]:
+    """Indexed on-disk books plus unindexed EPUBs under scan roots."""
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for row in _filename_fixup_rows(conn):
+        path = Path(row.file_path)
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if not path_is_under_any_root(resolved, scan_roots):
+            continue
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            paths.append(resolved)
+
+    disk_files, _, path_errors = collect_book_files(
+        scan_roots,
+        resolve_path=lambda item: item.resolve(),
+    )
+    for path in disk_files:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            paths.append(path)
+    return paths
 
 
 def backfill_content_hashes(

@@ -8,10 +8,13 @@ from pathlib import Path
 
 from exlibris.cleanup import load_books, sanitize_book_filenames
 from exlibris.filenames import (
+    build_metadata_filename,
     display_name,
     ensure_safe_filename,
     filename_needs_sanitization,
+    has_short_basename,
     sanitize_filename,
+    target_filename,
 )
 
 
@@ -24,6 +27,9 @@ def _connect(db_path: Path) -> sqlite3.Connection:
             id INTEGER PRIMARY KEY,
             file_path TEXT NOT NULL,
             file_name TEXT NOT NULL,
+            title TEXT,
+            authors TEXT,
+            publisher TEXT,
             content_hash TEXT,
             file_size INTEGER NOT NULL DEFAULT 0,
             file_mtime REAL NOT NULL DEFAULT 0,
@@ -62,10 +68,69 @@ def test_display_name_handles_surrogates() -> None:
     assert "\udcc6" not in printed
 
 
+def test_build_metadata_filename() -> None:
+    name = build_metadata_filename(
+        title="Kim",
+        authors="Rudyard Kipling",
+        publisher="Penguin",
+        fallback_stem="Kim",
+    )
+    assert name == "Kim - Rudyard Kipling-(Penguin).epub"
+
+
+def test_target_filename_renames_short_basenames() -> None:
+    name = target_filename(
+        "Kim.epub",
+        title="Kim",
+        authors="Rudyard Kipling",
+        publisher="Penguin",
+    )
+    assert name == "Kim - Rudyard Kipling-(Penguin).epub"
+    assert has_short_basename("Kim.epub") is True
+    assert has_short_basename("Long Enough Title.epub") is False
+
+
+def test_sanitize_book_filenames_renames_short_basename() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        short = root / "Kim.epub"
+        short.write_bytes(b"data")
+        conn = _connect(root / "library.db")
+        conn.execute(
+            """
+            INSERT INTO books (
+                file_path, file_name, title, authors, publisher,
+                file_size, file_mtime
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(short.resolve()),
+                short.name,
+                "Kim",
+                "Rudyard Kipling",
+                "Penguin",
+                short.stat().st_size,
+                short.stat().st_mtime,
+            ),
+        )
+        conn.commit()
+
+        updated, errors = sanitize_book_filenames(conn, [root], execute=True)
+        assert errors == []
+        assert updated == 1
+
+        book = load_books(conn)[0]
+        assert book.file_name == "Kim - Rudyard Kipling-(Penguin).epub"
+        assert Path(book.file_path).is_file()
+        assert not short.exists()
+
+        conn.close()
+
+
 def test_sanitize_book_filenames_updates_db() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        bad = root / "bad:name.epub"
+        bad = root / "bad:name-here.epub"
         bad.write_bytes(b"data")
         conn = _connect(root / "library.db")
         conn.execute(
@@ -79,8 +144,8 @@ def test_sanitize_book_filenames_updates_db() -> None:
         assert updated == 1
 
         book = load_books(conn)[0]
-        assert book.file_name == "badname.epub"
-        assert Path(book.file_path).name == "badname.epub"
+        assert book.file_name == "badname-here.epub"
+        assert Path(book.file_path).name == "badname-here.epub"
         assert Path(book.file_path).is_file()
         assert not bad.exists()
 
@@ -90,7 +155,7 @@ def test_sanitize_book_filenames_updates_db() -> None:
 def test_sanitize_book_filenames_dry_run() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        bad = root / "bad:name.epub"
+        bad = root / "bad:name-here.epub"
         bad.write_bytes(b"data")
         conn = _connect(root / "library.db")
         conn.execute(
