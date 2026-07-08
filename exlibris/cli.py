@@ -113,6 +113,7 @@ def cleanup_audit(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     force_clean: bool = typer.Option(False, "--force-clean"),
     validate_epubs: bool = typer.Option(False, "--validate-epubs"),
+    validate_epubs_only: bool = typer.Option(False, "--validate-epubs-only"),
     validate_epubs_deep: bool = typer.Option(False, "--validate-epubs-deep"),
     ebook_meta: str | None = typer.Option(None, "--ebook-meta"),
 ) -> None:
@@ -126,6 +127,7 @@ def cleanup_audit(
         verbose=verbose,
         force_clean=force_clean,
         validate_epubs=validate_epubs,
+        validate_epubs_only=validate_epubs_only,
         validate_epubs_deep=validate_epubs_deep,
         ebook_meta=ebook_meta,
     )
@@ -143,6 +145,7 @@ def cleanup_run(
     backfill_hashes: bool = typer.Option(False, "--backfill-hashes"),
     prune_empty_dirs: bool = typer.Option(False, "--prune-empty-dirs"),
     validate_epubs: bool = typer.Option(False, "--validate-epubs"),
+    validate_epubs_only: bool = typer.Option(False, "--validate-epubs-only"),
     validate_epubs_deep: bool = typer.Option(False, "--validate-epubs-deep"),
     ebook_meta: str | None = typer.Option(None, "--ebook-meta"),
 ) -> None:
@@ -159,6 +162,7 @@ def cleanup_run(
         backfill_hashes=backfill_hashes,
         prune_empty_dirs=prune_empty_dirs,
         validate_epubs=validate_epubs,
+        validate_epubs_only=validate_epubs_only,
         validate_epubs_deep=validate_epubs_deep,
         ebook_meta=ebook_meta,
     )

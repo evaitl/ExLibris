@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import tempfile
+import zlib
 import zipfile
 from pathlib import Path
 
-from exlibris.epub_validate import _open_epub_zip, validate_epub_structure
+from exlibris.epub_validate import _check_zip_integrity, _open_epub_zip, validate_epub_structure
 
 
 def _write_minimal_epub(path: Path, *, include_spine: bool = True) -> None:
@@ -68,6 +69,45 @@ def test_open_epub_zip_falls_back_when_utf8_decode_fails(
         assert "META-INF/container.xml" in archive.namelist()
 
     assert calls[:2] == ["utf-8", "cp437"]
+
+
+def test_check_zip_integrity_handles_testzip_zlib_error() -> None:
+    class BrokenArchive:
+        def testzip(self) -> None:
+            raise zlib.error("Error -3 while decompressing data: invalid stored block lengths")
+
+    assert _check_zip_integrity(BrokenArchive()) == (
+        "corrupt ZIP data: Error -3 while decompressing data: invalid stored block lengths"
+    )
+
+
+def test_validate_epub_structure_reports_testzip_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "broken.epub"
+    _write_minimal_epub(path)
+
+    class BrokenArchive:
+        def __enter__(self) -> BrokenArchive:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def testzip(self) -> None:
+            raise zlib.error("invalid stored block lengths")
+
+        def namelist(self) -> list[str]:
+            return []
+
+    def fake_open_epub_zip(_path: Path) -> BrokenArchive:
+        return BrokenArchive()
+
+    monkeypatch.setattr("exlibris.epub_validate._open_epub_zip", fake_open_epub_zip)
+
+    result = validate_epub_structure(path)
+    assert result.ok is False
+    assert any("corrupt ZIP data" in error for error in result.errors)
 
 
 def test_validate_epub_structure_accepts_minimal_epub() -> None:

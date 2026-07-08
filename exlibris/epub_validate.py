@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
@@ -91,7 +92,23 @@ def _read_zip_member(
     actual = lookup.get(member_path) or lookup.get(member_path.lower())
     if actual is None:
         raise KeyError(member_path)
-    return archive.read(actual)
+    try:
+        return archive.read(actual)
+    except zlib.error as exc:
+        raise OSError(f"corrupt ZIP member {member_path}: {exc}") from exc
+
+
+def _check_zip_integrity(archive: zipfile.ZipFile) -> str | None:
+    """Return an error message when the archive fails integrity checks."""
+    try:
+        bad_member = archive.testzip()
+    except zlib.error as exc:
+        return f"corrupt ZIP data: {exc}"
+    except (RuntimeError, EOFError) as exc:
+        return f"corrupt ZIP archive: {exc}"
+    if bad_member is not None:
+        return f"corrupt ZIP member: {bad_member}"
+    return None
 
 
 def validate_epub_structure(path: Path) -> EpubValidationResult:
@@ -116,10 +133,10 @@ def validate_epub_structure(path: Path) -> EpubValidationResult:
 
     try:
         with _open_epub_zip(path) as archive:
-            bad_member = archive.testzip()
-            if bad_member is not None:
+            zip_error = _check_zip_integrity(archive)
+            if zip_error is not None:
                 result.ok = False
-                result.errors.append(f"corrupt ZIP member: {bad_member}")
+                result.errors.append(zip_error)
                 return result
 
             lookup = _zip_name_lookup(archive)
