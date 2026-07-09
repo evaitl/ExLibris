@@ -8,10 +8,12 @@ from pathlib import Path
 
 from exlibris.cleanup import (
     InvalidEpub,
+    audit_epub_integrity,
     build_path_to_book_id,
     remove_invalid_epubs,
 )
 from exlibris.cover_paths import cover_storage_path
+from exlibris.epub_validate import EpubValidationResult
 
 
 def _init_db(db_path: Path) -> sqlite3.Connection:
@@ -140,3 +142,41 @@ def test_build_path_to_book_id_resolves_paths() -> None:
         mapping = build_path_to_book_id(conn)
         assert mapping[str(book.resolve())] == 1
         conn.close()
+
+
+def test_audit_epub_integrity_streams_invalid_and_valid_milestones(
+    monkeypatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good_a = root / "a.epub"
+        bad = root / "b.epub"
+        good_c = root / "c.epub"
+        for path in (good_a, bad, good_c):
+            path.write_bytes(b"placeholder")
+
+        def fake_validate(path: Path, *, deep: bool = False, ebook_meta_cmd=None):
+            del deep, ebook_meta_cmd
+            if path.name == "b.epub":
+                return EpubValidationResult(
+                    path=path, ok=False, errors=["broken spine"]
+                )
+            return EpubValidationResult(path=path, ok=True, errors=[])
+
+        monkeypatch.setattr("exlibris.cleanup.validate_epub", fake_validate)
+
+        invalids: list[InvalidEpub] = []
+        valids: list[tuple[int, int]] = []
+        invalid, errors = audit_epub_integrity(
+            [good_a, bad, good_c],
+            path_to_book_id={str(bad.resolve()): 9},
+            on_invalid=invalids.append,
+            on_valid_progress=lambda count, total: valids.append((count, total)),
+            valid_progress_interval=2,
+        )
+        assert errors == []
+        assert len(invalid) == 1
+        assert invalid[0].book_id == 9
+        assert invalid[0].detail == "broken spine"
+        assert [item.path.name for item in invalids] == ["b.epub"]
+        assert valids == [(2, 3)]

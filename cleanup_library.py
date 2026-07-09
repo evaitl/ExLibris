@@ -123,15 +123,49 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _log(message: str = "", *, file=None) -> None:
+    print(message, file=file, flush=True)
+
+
 def _print_section(title: str, lines: list[str], *, quiet: bool) -> None:
     if quiet and not lines:
         return
-    print(f"\n== {title} ({len(lines)}) ==")
+    _log(f"\n== {title} ({len(lines)}) ==")
     if not lines:
-        print("  (none)")
+        _log("  (none)")
         return
     for line in lines:
-        print(f"  {line}")
+        _log(f"  {line}")
+
+
+def _progress_callback(*, quiet: bool, verbose: bool, label: str):
+    """Return a progress callback, or None when output should stay quiet."""
+    if quiet:
+        return None
+
+    def on_progress(current: int, total: int, item: str) -> None:
+        if total <= 0:
+            return
+        width = len(str(total))
+        if verbose or current == 1 or current == total or current % 25 == 0:
+            _log(f"{label} [{current:>{width}}/{total}] {item}")
+
+    return on_progress
+
+
+def _epub_validation_live_callbacks(*, quiet: bool):
+    """Callbacks that stream invalid EPUBs and valid milestones during validation."""
+    if quiet:
+        return None, None
+
+    def on_invalid(item) -> None:
+        _log(f"invalid: {item.display_line()}")
+
+    def on_valid_progress(valid_count: int, total: int) -> None:
+        width = len(str(total))
+        _log(f"valid [{valid_count:>{width}}/{total}] checked OK")
+
+    return on_invalid, on_valid_progress
 
 
 def print_audit(report: AuditReport, *, quiet: bool) -> None:
@@ -191,13 +225,20 @@ def _validate_epubs(
     *,
     deep: bool,
     ebook_meta: str | None,
+    quiet: bool = False,
+    verbose: bool = False,
 ) -> tuple[list[str], list[str]]:
     paths = collect_epub_paths_for_validation(conn, scan_roots)
+    if not quiet and paths:
+        _log(f"Validating {len(paths)} EPUB(s)...")
+    on_invalid, on_valid_progress = _epub_validation_live_callbacks(quiet=quiet)
     invalid, errors = audit_epub_integrity(
         paths,
         path_to_book_id=build_path_to_book_id(conn),
         deep=deep,
         ebook_meta_cmd=ebook_meta,
+        on_invalid=on_invalid,
+        on_valid_progress=on_valid_progress,
     )
     return [item.display_line() for item in invalid], errors
 
@@ -210,15 +251,22 @@ def _run_epub_validation_pass(
     deep: bool,
     ebook_meta: str | None,
     execute: bool,
+    quiet: bool = False,
+    verbose: bool = False,
 ) -> tuple[CleanupResult, list[str]]:
     """Validate EPUBs and optionally remove invalid files/rows."""
     result = CleanupResult()
     paths = collect_epub_paths_for_validation(conn, scan_roots)
+    if not quiet and paths:
+        _log(f"Validating {len(paths)} EPUB(s)...")
+    on_invalid, on_valid_progress = _epub_validation_live_callbacks(quiet=quiet)
     invalid_items, validate_errors = audit_epub_integrity(
         paths,
         path_to_book_id=build_path_to_book_id(conn),
         deep=deep,
         ebook_meta_cmd=ebook_meta,
+        on_invalid=on_invalid,
+        on_valid_progress=on_valid_progress,
     )
     invalid_lines = [item.display_line() for item in invalid_items]
     result.invalid_epubs = len(invalid_items)
@@ -246,10 +294,13 @@ def _normalize_validate_epub_args(args: argparse.Namespace) -> int | None:
     if args.validate_epubs_only:
         args.validate_epubs = True
     if args.validate_epubs_deep and not args.validate_epubs:
-        print("error: --validate-epubs-deep requires --validate-epubs", file=sys.stderr)
+        _log(
+            "error: --validate-epubs-deep requires --validate-epubs",
+            file=sys.stderr,
+        )
         return 1
     if args.validate_epubs_only and not args.validate_epubs:
-        print(
+        _log(
             "error: --validate-epubs-only requires EPUB validation",
             file=sys.stderr,
         )
@@ -268,21 +319,21 @@ def _print_epub_validation_only(
 ) -> None:
     if not quiet:
         mode = "EXECUTE" if execute else "DRY-RUN"
-        print(f"=== {mode} (EPUB validation only) ===")
-        print(f"Database: {db_path}")
-        print(f"Scan roots: {', '.join(str(root) for root in scan_roots)}")
+        _log(f"=== {mode} (EPUB validation only) ===")
+        _log(f"Database: {db_path}")
+        _log(f"Scan roots: {', '.join(str(root) for root in scan_roots)}")
     _print_section("Invalid EPUBs", invalid_lines, quiet=quiet)
     if not quiet and result.invalid_epubs:
         if execute:
-            print(
+            _log(
                 f"removed {result.invalid_epubs} invalid EPUB(s): "
                 f"{result.files_deleted} file(s), {result.rows_purged} row(s), "
                 f"{result.covers_removed} cover set(s)"
             )
         else:
-            print(f"would remove {result.invalid_epubs} invalid EPUB(s)")
+            _log(f"would remove {result.invalid_epubs} invalid EPUB(s)")
     if not quiet:
-        print(
+        _log(
             f"\nSummary: "
             f"{result.invalid_epubs} invalid EPUB(s), "
             f"{result.files_deleted} file(s) deleted, "
@@ -290,7 +341,7 @@ def _print_epub_validation_only(
             f"{result.covers_removed} cover(s) removed"
         )
         if not execute:
-            print("Re-run with --execute to apply changes.")
+            _log("Re-run with --execute to apply changes.")
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -301,6 +352,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
     scan_roots = _scan_roots(args)
     covers_dir = _covers_dir(args)
 
+    if not args.quiet:
+        _log(f"Database: {db_path}")
+        _log(f"Scan roots: {', '.join(str(root) for root in scan_roots)}")
+
     with _connect(db_path) as conn:
         if args.validate_epubs_only:
             result, invalid_lines = _run_epub_validation_pass(
@@ -310,6 +365,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 deep=args.validate_epubs_deep,
                 ebook_meta=args.ebook_meta,
                 execute=False,
+                quiet=args.quiet,
+                verbose=args.verbose,
             )
             _print_epub_validation_only(
                 invalid_lines,
@@ -320,30 +377,38 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 execute=False,
             )
             if result.errors:
-                print(f"{len(result.errors)} error(s):", file=sys.stderr)
+                _log(f"{len(result.errors)} error(s):", file=sys.stderr)
                 for err in result.errors:
-                    print(f"  - {err}", file=sys.stderr)
+                    _log(f"  - {err}", file=sys.stderr)
                 return 1
             return 0
 
-        report = audit_library(conn, scan_roots, covers_dir=covers_dir)
+        if not args.quiet:
+            _log("Auditing library...")
+        report = audit_library(
+            conn,
+            scan_roots,
+            covers_dir=covers_dir,
+            on_progress=_progress_callback(
+                quiet=args.quiet, verbose=args.verbose, label="hash"
+            ),
+        )
         if args.validate_epubs:
             invalid, validate_errors = _validate_epubs(
                 conn,
                 scan_roots,
                 deep=args.validate_epubs_deep,
                 ebook_meta=args.ebook_meta,
+                quiet=args.quiet,
+                verbose=args.verbose,
             )
             report.invalid_epubs = invalid
             report.errors.extend(validate_errors)
 
-    if not args.quiet:
-        print(f"Database: {db_path}")
-        print(f"Scan roots: {', '.join(str(root) for root in scan_roots)}")
     print_audit(report, quiet=args.quiet)
 
     if args.force_clean and report.absent_books and not args.execute:
-        print(
+        _log(
             f"\nWould purge {len(report.absent_books)} absent row(s) with "
             "--execute --force-clean"
         )
@@ -376,6 +441,9 @@ def _index_new_files(
     SessionLocal = init_db(engine)
     resolved_covers = resolve_covers_dir(covers_dir)
 
+    if not args.quiet:
+        _log(f"Indexing {len(new_files)} new file(s)...")
+
     with SessionLocal() as session:
         for index, path in enumerate(new_files, start=1):
             try:
@@ -394,20 +462,28 @@ def _index_new_files(
                             if scan_result.book
                             else path.name
                         )
-                        print(f"indexed: {title}")
+                        _log(f"indexed: {title}")
                 elif scan_result.status == "duplicate" and args.verbose:
-                    print(f"skipped duplicate during index: {path}")
+                    _log(f"skipped duplicate during index: {path}")
                 elif scan_result.status == "repointed":
                     result.rows_updated += 1
                     if not args.quiet and scan_result.book is not None:
                         title = scan_result.book.title or scan_result.book.file_name
-                        print(f"repointed: {title} -> {path.name} (metadata unchanged)")
+                        _log(
+                            f"repointed: {title} -> {path.name} (metadata unchanged)"
+                        )
                 elif scan_result.status == "unchanged" and args.verbose:
-                    print(f"unchanged during index: {path}")
+                    _log(f"unchanged during index: {path}")
             except (EbookMetaError, Exception) as exc:
                 result.errors.append(f"{path}: {exc}")
-            if args.verbose and not args.quiet:
-                print(f"[{index}/{len(new_files)}] {path.name}", flush=True)
+            if not args.quiet and (
+                args.verbose
+                or index == 1
+                or index == len(new_files)
+                or index % 25 == 0
+            ):
+                width = len(str(len(new_files)))
+                _log(f"index [{index:>{width}}/{len(new_files)}] {path.name}")
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -421,13 +497,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     force_clean = args.force_clean
 
     if force_clean and not execute:
-        print(
+        _log(
             "error: --force-clean requires --execute",
             file=sys.stderr,
         )
         return 1
 
     result = CleanupResult()
+
+    if not args.quiet:
+        mode = "EXECUTE" if execute else "DRY-RUN"
+        _log(f"=== {mode} ===")
+        _log(f"Database: {db_path}")
+        _log(f"Scan roots: {', '.join(str(root) for root in scan_roots)}")
 
     with _connect(db_path) as conn:
         if args.validate_epubs_only:
@@ -438,6 +520,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 deep=args.validate_epubs_deep,
                 ebook_meta=args.ebook_meta,
                 execute=execute,
+                quiet=args.quiet,
+                verbose=args.verbose,
             )
             _print_epub_validation_only(
                 invalid_lines,
@@ -448,55 +532,81 @@ def cmd_run(args: argparse.Namespace) -> int:
                 execute=execute,
             )
             if result.errors:
-                print(f"{len(result.errors)} error(s):", file=sys.stderr)
+                _log(f"{len(result.errors)} error(s):", file=sys.stderr)
                 for err in result.errors:
-                    print(f"  - {err}", file=sys.stderr)
+                    _log(f"  - {err}", file=sys.stderr)
                 return 1
             return 0
 
         if args.backfill_hashes:
-            updated, backfill_errors = backfill_content_hashes(conn, execute=execute)
+            if not args.quiet:
+                _log("Backfilling content hashes...")
+            updated, backfill_errors = backfill_content_hashes(
+                conn,
+                execute=execute,
+                on_progress=_progress_callback(
+                    quiet=args.quiet, verbose=args.verbose, label="backfill"
+                ),
+            )
             result.hashes_backfilled = updated
             result.errors.extend(backfill_errors)
             if not args.quiet:
                 verb = "backfilled" if execute else "would backfill"
-                print(f"{verb} {updated} content hash(es)")
+                _log(f"{verb} {updated} content hash(es)")
 
+        if not args.quiet:
+            _log("Sanitizing filenames...")
         sanitized, sanitize_errors = sanitize_book_filenames(
             conn,
             scan_roots,
             execute=execute,
+            on_progress=_progress_callback(
+                quiet=args.quiet, verbose=args.verbose, label="sanitize"
+            ),
         )
         result.filenames_sanitized = sanitized
         result.errors.extend(sanitize_errors)
         if not args.quiet and sanitized:
             verb = "sanitized" if execute else "would sanitize"
-            print(f"{verb} {sanitized} filename(s)")
+            _log(f"{verb} {sanitized} filename(s)")
         elif not args.quiet and not execute:
             fixes = list_filename_fixes(conn, scan_roots)
             if fixes and args.verbose:
                 for line in fixes:
-                    print(f"would rename: {line}")
+                    _log(f"would rename: {line}")
 
-        report = audit_library(conn, scan_roots, covers_dir=covers_dir)
+        if not args.quiet:
+            _log("Auditing library...")
+        report = audit_library(
+            conn,
+            scan_roots,
+            covers_dir=covers_dir,
+            on_progress=_progress_callback(
+                quiet=args.quiet, verbose=args.verbose, label="hash"
+            ),
+        )
 
         invalid_items = []
         if args.validate_epubs:
             paths = collect_epub_paths_for_validation(conn, scan_roots)
+            if not args.quiet and paths:
+                _log(f"Validating {len(paths)} EPUB(s)...")
+            on_invalid, on_valid_progress = _epub_validation_live_callbacks(
+                quiet=args.quiet
+            )
             invalid_items, validate_errors = audit_epub_integrity(
                 paths,
                 path_to_book_id=build_path_to_book_id(conn),
                 deep=args.validate_epubs_deep,
                 ebook_meta_cmd=args.ebook_meta,
+                on_invalid=on_invalid,
+                on_valid_progress=on_valid_progress,
             )
             report.invalid_epubs = [item.display_line() for item in invalid_items]
             result.invalid_epubs = len(invalid_items)
             result.errors.extend(validate_errors)
 
         if not args.quiet:
-            mode = "EXECUTE" if execute else "DRY-RUN"
-            print(f"=== {mode} ===")
-            print(f"Database: {db_path}")
             print_audit(report, quiet=args.quiet)
 
         if args.validate_epubs and invalid_items:
@@ -515,15 +625,18 @@ def cmd_run(args: argparse.Namespace) -> int:
             result.errors.extend(remove_errors)
             if not args.quiet:
                 if execute:
-                    print(
+                    _log(
                         f"removed {len(invalid_items)} invalid EPUB(s): "
                         f"{files_deleted} file(s), {rows_purged} row(s), "
                         f"{covers_removed} cover set(s)"
                     )
                 else:
-                    print(f"would remove {len(invalid_items)} invalid EPUB(s)")
+                    _log(f"would remove {len(invalid_items)} invalid EPUB(s)")
 
         repointed_ids: set[int] = set()
+
+        if report.duplicate_groups and not args.quiet:
+            _log(f"Processing {len(report.duplicate_groups)} duplicate group(s)...")
 
         for group in report.duplicate_groups:
             try:
@@ -537,13 +650,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 if not args.quiet and (rows_updated or files_deleted):
                     if group.repoint_only and rows_updated:
                         verb = "repoint" if execute else "would repoint"
-                        print(
+                        _log(
                             f"{verb} book {group.book_id} -> {group.keeper} "
                             "(metadata unchanged)"
                         )
                     elif rows_updated or files_deleted:
                         verb = "dedupe" if execute else "would dedupe"
-                        print(
+                        _log(
                             f"{verb} hash {group.content_hash[:8]}…: "
                             f"keeper={group.keeper.name}, "
                             f"delete {files_deleted} file(s)"
@@ -559,16 +672,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         if execute:
             _index_new_files(args, db_path, covers_dir, report.new_files, result)
         elif report.new_files and not args.quiet:
-            print(f"would index {len(report.new_files)} new file(s)")
+            _log(f"would index {len(report.new_files)} new file(s)")
 
         if args.prune_empty_dirs:
+            if not args.quiet:
+                _log("Pruning empty directories...")
             pruned = prune_empty_directories(scan_roots, execute=execute)
             result.dirs_pruned = pruned
             if not args.quiet and pruned:
                 verb = "pruned" if execute else "would prune"
-                print(f"{verb} {pruned} empty director{'y' if pruned == 1 else 'ies'}")
+                _log(f"{verb} {pruned} empty director{'y' if pruned == 1 else 'ies'}")
 
         if force_clean:
+            if not args.quiet:
+                _log("Purging absent rows / orphan covers...")
             valid_ids = {book.id for book in load_books(conn)}
             for book in report.absent_books:
                 if book.id in repointed_ids:
@@ -578,12 +695,12 @@ def cmd_run(args: argparse.Namespace) -> int:
                     result.rows_purged += 1
                     valid_ids.discard(book.id)
                     if args.verbose:
-                        print(
+                        _log(
                             f"purged book id={book.id} "
                             f"({favorites} favorite(s) removed)"
                         )
                 elif not args.quiet:
-                    print(f"would purge book id={book.id}  {book.file_path}")
+                    _log(f"would purge book id={book.id}  {book.file_path}")
 
             orphan_covers = find_orphan_covers(covers_dir, valid_ids)
             for cover_path in orphan_covers:
@@ -597,7 +714,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     result.covers_removed += 1
 
     if not args.quiet:
-        print(
+        _log(
             f"\nSummary: "
             f"{result.files_deleted} file(s) deleted, "
             f"{result.rows_updated} row(s) updated, "
@@ -610,12 +727,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{result.covers_removed} cover(s) removed"
         )
         if not execute:
-            print("Re-run with --execute to apply changes.")
+            _log("Re-run with --execute to apply changes.")
 
     if result.errors:
-        print(f"{len(result.errors)} error(s):", file=sys.stderr)
+        _log(f"{len(result.errors)} error(s):", file=sys.stderr)
         for err in result.errors:
-            print(f"  - {err}", file=sys.stderr)
+            _log(f"  - {err}", file=sys.stderr)
         return 1
     return 0
 

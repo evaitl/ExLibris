@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# current, total, label (usually a basename or path fragment)
+ProgressCallback = Callable[[int, int, str], None]
+InvalidEpubCallback = Callable[["InvalidEpub"], None]
+# valid_count so far, total paths being checked
+ValidEpubProgressCallback = Callable[[int, int], None]
+
+VALID_EPUB_PROGRESS_INTERVAL = 1000
 
 from exlibris.book_paths import (
     collect_book_files,
@@ -124,13 +133,17 @@ def _group_unindexed_by_hash(
     unindexed: list[Path],
     *,
     errors: list[str],
+    on_progress: ProgressCallback | None = None,
 ) -> dict[str, list[Path]]:
     by_hash: dict[str, list[Path]] = defaultdict(list)
-    for path in unindexed:
+    total = len(unindexed)
+    for index, path in enumerate(unindexed, start=1):
         try:
             by_hash[sha1_file(path)].append(path)
         except OSError as exc:
             errors.append(f"{path}: {exc}")
+        if on_progress is not None:
+            on_progress(index, total, path.name)
     return by_hash
 
 
@@ -174,6 +187,7 @@ def audit_library(
     scan_roots: list[Path],
     *,
     covers_dir: Path,
+    on_progress: ProgressCallback | None = None,
 ) -> AuditReport:
     report = AuditReport()
     books = load_books(conn)
@@ -193,7 +207,11 @@ def audit_library(
     unindexed = [path for path in disk_files if str(path) not in indexed_paths]
     report.unindexed_files = unindexed
 
-    unindexed_by_hash = _group_unindexed_by_hash(unindexed, errors=report.errors)
+    unindexed_by_hash = _group_unindexed_by_hash(
+        unindexed,
+        errors=report.errors,
+        on_progress=on_progress,
+    )
     report.duplicate_groups = build_duplicate_groups(unindexed_by_hash, hash_to_book)
 
     report.new_files = [
@@ -375,13 +393,18 @@ def sanitize_book_filenames(
     *,
     execute: bool,
     max_short_stem_len: int = 10,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[int, list[str]]:
     """Rename unsafe or very short basenames and update indexed rows."""
     errors: list[str] = []
     updated = 0
+    rows = _filename_fixup_rows(conn)
+    total = len(rows)
 
-    for row in _filename_fixup_rows(conn):
+    for index, row in enumerate(rows, start=1):
         path = Path(row.file_path)
+        if on_progress is not None:
+            on_progress(index, total, path.name)
         if not path.is_file():
             continue
         resolved = path.resolve()
@@ -437,12 +460,26 @@ def audit_epub_integrity(
     path_to_book_id: dict[str, int] | None = None,
     deep: bool = False,
     ebook_meta_cmd: str | None = None,
+    on_progress: ProgressCallback | None = None,
+    on_invalid: InvalidEpubCallback | None = None,
+    on_valid_progress: ValidEpubProgressCallback | None = None,
+    valid_progress_interval: int = VALID_EPUB_PROGRESS_INTERVAL,
 ) -> tuple[list[InvalidEpub], list[str]]:
-    """Validate EPUB files on disk. Returns (invalid items, errors)."""
+    """Validate EPUB files on disk. Returns (invalid items, errors).
+
+    ``on_invalid`` is called as soon as each invalid EPUB is found.
+    ``on_valid_progress`` is called after every ``valid_progress_interval``
+    valid EPUBs (default 1000).
+    """
     path_to_book_id = path_to_book_id or {}
     invalid: list[InvalidEpub] = []
     errors: list[str] = []
-    for path in sorted(paths, key=lambda item: str(item).lower()):
+    ordered = sorted(paths, key=lambda item: str(item).lower())
+    total = len(ordered)
+    valid_count = 0
+    for index, path in enumerate(ordered, start=1):
+        if on_progress is not None:
+            on_progress(index, total, path.name)
         try:
             result = validate_epub(
                 path,
@@ -454,13 +491,22 @@ def audit_epub_integrity(
             continue
         if not result.ok:
             detail = "; ".join(result.errors) if result.errors else "invalid"
-            invalid.append(
-                InvalidEpub(
-                    path=path.resolve(),
-                    book_id=path_to_book_id.get(str(path.resolve())),
-                    detail=detail,
-                )
+            item = InvalidEpub(
+                path=path.resolve(),
+                book_id=path_to_book_id.get(str(path.resolve())),
+                detail=detail,
             )
+            invalid.append(item)
+            if on_invalid is not None:
+                on_invalid(item)
+            continue
+        valid_count += 1
+        if (
+            on_valid_progress is not None
+            and valid_progress_interval > 0
+            and valid_count % valid_progress_interval == 0
+        ):
+            on_valid_progress(valid_count, total)
     return invalid, errors
 
 
@@ -565,14 +611,19 @@ def backfill_content_hashes(
     conn: sqlite3.Connection,
     *,
     execute: bool,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[int, list[str]]:
     """Compute SHA-1 for rows with NULL content_hash when the file exists."""
     errors: list[str] = []
     updated = 0
-    for book in load_books(conn):
-        if book.content_hash is not None:
-            continue
+    candidates = [
+        book for book in load_books(conn) if book.content_hash is None
+    ]
+    total = len(candidates)
+    for index, book in enumerate(candidates, start=1):
         path = Path(book.file_path)
+        if on_progress is not None:
+            on_progress(index, total, path.name)
         if not path.is_file():
             continue
         try:

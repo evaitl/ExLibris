@@ -39,6 +39,20 @@ def test_backfill_content_hashes() -> None:
         assert updated == 1
         row = conn.execute("SELECT content_hash FROM books WHERE id = 1").fetchone()
         assert row["content_hash"] is not None
+
+        conn.execute("UPDATE books SET content_hash = NULL WHERE id = 1")
+        conn.commit()
+        seen: list[tuple[int, int, str]] = []
+        updated, errors = backfill_content_hashes(
+            conn,
+            execute=True,
+            on_progress=lambda current, total, item: seen.append(
+                (current, total, item)
+            ),
+        )
+        assert errors == []
+        assert updated == 1
+        assert seen == [(1, 1, epub.name)]
         conn.close()
 
 
