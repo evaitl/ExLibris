@@ -85,5 +85,5 @@ def test_epub_validation_live_callbacks_report_invalid_and_valid(capsys) -> None
     )
     on_valid_progress(1000, 5000)
     out = capsys.readouterr().out
-    assert "invalid: id=7  /books/bad.epub: not a ZIP archive" in out
+    assert "invalid: id=7  /books/bad.epub" in out
     assert "valid [1000/5000] checked OK" in out

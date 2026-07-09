@@ -64,7 +64,7 @@ class InvalidEpub:
 
     def display_line(self) -> str:
         prefix = f"id={self.book_id}  " if self.book_id is not None else ""
-        return f"{prefix}{display_path(self.path)}: {self.detail}"
+        return f"{prefix}{display_path(self.path)}"
 
 
 @dataclass
