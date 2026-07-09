@@ -169,7 +169,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Pagination** with configurable page size (10, 25, 50, 100, or 200)
 - **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
-- **Debounced search** — filters apply automatically ~1s after you stop typing
+- **Debounced search** — filters apply automatically ~2s after you stop typing
 - **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page on the library; `←`/`→` move between books on detail pages)
 - **Touch navigation** — swipe left/right on library and detail pages (same as arrow keys)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)

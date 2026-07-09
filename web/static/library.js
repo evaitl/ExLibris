@@ -1,5 +1,5 @@
 (function () {
-  const DEBOUNCE_MS = 1000;
+  const DEBOUNCE_MS = 2000;
 
   function isTyping() {
     const el = document.activeElement;
