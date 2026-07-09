@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from exlibris.auth import session_cookie_header
+from exlibris.cgi.redirects import safe_post_login_redirect
 from exlibris.cgi.common import authenticate_user, connect, create_session_for_user
 from exlibris.cgi.render import render_error, render_login
 
@@ -29,9 +30,7 @@ def _html(body: str, *, extra_headers: list[str] | None = None) -> None:
 
 def main() -> None:
     form = cgi.FieldStorage()
-    next_url = unquote(form.getfirst("next") or "")
-    if next_url and not next_url.startswith("index.py") and not next_url.startswith("book.py"):
-        next_url = ""
+    next_url = safe_post_login_redirect(unquote(form.getfirst("next") or ""))
 
     if os.environ.get("REQUEST_METHOD", "GET").upper() != "POST":
         _html(render_login(next_url=next_url))

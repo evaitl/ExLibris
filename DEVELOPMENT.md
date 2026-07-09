@@ -264,7 +264,8 @@ exlibris cleanup run --execute             # dedupe, index new EPUBs (dry-run wi
 exlibris cleanup run --execute \
   --backfill-hashes --prune-empty-dirs     # also fill NULL content_hash, prune empty dirs
 exlibris cleanup run --execute --validate-epubs  # remove corrupt EPUBs + DB rows (destructive)
-exlibris cleanup audit --validate-epubs    # report invalid EPUBs only (read-only)
+exlibris cleanup audit --validate-epubs-only     # report invalid EPUBs only (read-only)
+exlibris cleanup run --execute --validate-epubs-only  # remove bad EPUBs; skip other cleanup
 exlibris cleanup run --execute --force-clean  # hard-delete rows whose file is gone
 python scan_books.py -v                    # standalone scanner, verbose
 ./manage_users.py list                     # list accounts (stdlib; no venv)
@@ -291,6 +292,7 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 | Audit | Unindexed files, duplicate groups, new files, absent rows, orphan covers, NULL hashes, out-of-root paths, filename fixes, invalid EPUBs (with `--validate-epubs`) |
 | Sanitize | Every `run`: strip unsafe characters; rename stems &lt; 10 chars to `{title} - {authors}-({publisher}).epub`; update `file_path` / `file_name` |
 | Validate | `--validate-epubs`: ZIP + container + OPF spine checks (stdlib); `--validate-epubs-deep` also runs `ebook-meta` |
+| Validate only | `--validate-epubs-only`: skip dedupe, sanitize, index; only validate (and remove with `--execute`) |
 | Remove invalid | With `run --execute --validate-epubs`: delete bad files under scan roots; `purge_book` + cover removal for indexed rows |
 | Dedupe | SHA-1 match → keep longest basename; delete shorter copies; repoint DB (no Calibre) |
 | Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover) |
@@ -299,6 +301,28 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 | Purge | `--force-clean`: DELETE rows whose `file_path` is not a regular file |
 
 `audit` and dedupe/repoint use sqlite3 + `sha1_file` (no venv). Indexing new files needs venv + Calibre.
+
+### EPUB validation (`exlibris/epub_validate.py`)
+
+Structural validation only — not malware scanning. Checks:
+
+- ZIP integrity (`testzip`, member reads; catches corrupt/truncated archives)
+- `META-INF/container.xml` and OPF manifest/spine
+- Spine HTML/XHTML exists, non-empty, and parses as XML
+- Legacy ZIP member name encodings (utf-8 → cp437 → latin-1)
+
+`--validate-epubs-deep` adds Calibre `ebook-meta` (must open the file). Does **not** scan JS, zip bombs, or non-spine assets.
+
+`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. `audit_epub_integrity()` reports progress every 1000 valid EPUBs.
+
+Recommended manual schedule on large libraries: `audit --validate-epubs-only` → dry-run `run --validate-epubs-only` → `run --execute --validate-epubs-only`. Not part of default cron (too slow for nightly runs on ~500K books).
+
+### Web UI hardening (untrusted metadata)
+
+- **Descriptions:** rendered with `esc()` as plain text (`white-space: pre-wrap`); not interpreted as HTML
+- **Login/register redirects:** `safe_post_login_redirect()` allows only `index.py` or `book.py?id=<digits>` with optional browse query params; rejects CRLF and absolute URLs
+- **Fetch metadata:** `merge_fetched_metadata()` fills empty fields by default; overwriting existing values requires the **Overwrite existing metadata** checkbox; null online values never clear stored fields
+- **Book detail prev/next:** `neighbor_book_ids()` uses keyset queries on sort key + `books.id` instead of a full-library window sort
 
 Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 

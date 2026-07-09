@@ -174,7 +174,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Touch navigation** — swipe left/right on library and detail pages (same as arrow keys)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages; small star on library cards when signed in
-- Book detail pages with cover, formatted dates, file name, HTML descriptions, download
+- Book detail pages with cover, formatted dates, file name, plain-text descriptions (HTML escaped), download
 - **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified)
 - **Fetch metadata online** and **restore cover from file** (embedded EPUB cover) — administrators only
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
@@ -202,6 +202,8 @@ Admin capabilities on the book detail page:
 - Fetch metadata online
 - Restore cover from the embedded EPUB image
 
+**Fetch metadata** fills empty fields by default. To replace existing title, author, publisher, etc., check **Overwrite existing metadata** on the fetch form. Null values from online sources never clear stored fields.
+
 After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
 
 ```bash
@@ -222,14 +224,17 @@ Incremental scans are quick when nothing changed.
 | Also backfill SHA-1, prune empty dirs | add `--backfill-hashes --prune-empty-dirs` |
 | Sanitize filenames + update DB paths | included in `run` (dry-run or `--execute`) |
 | Validate EPUB structure / readability | add `--validate-epubs` (optional `--validate-epubs-deep`) |
+| Validate EPUBs only (skip dedupe/index) | `--validate-epubs-only` |
 | Remove corrupt EPUBs + DB rows | `run --execute --validate-epubs` (destructive; dry-run first) |
 | Hard-delete rows with no file on disk | add `--force-clean` (requires `--execute`) |
 
 ```bash
 ./cleanup_library.py audit
-./cleanup_library.py audit --validate-epubs
+./cleanup_library.py audit --validate-epubs-only          # invalid EPUBs only (read-only)
+./cleanup_library.py run --validate-epubs-only            # dry-run removal only
+./cleanup_library.py run --execute --validate-epubs-only    # remove bad EPUBs; no other cleanup
 ./cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs
-./cleanup_library.py run --execute --validate-epubs   # destructive: removes bad EPUBs
+./cleanup_library.py run --execute --validate-epubs       # full cleanup + remove bad EPUBs
 exlibris cleanup run --execute --backfill-hashes --prune-empty-dirs
 ```
 
@@ -243,7 +248,19 @@ Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force
 
 **Filenames:** `run` renames unsafe characters and very short basenames (stem &lt; 10 characters) to `{title} - {authors}-({publisher}).epub`, then updates `file_path` and `file_name` in the database. `audit` lists planned renames under **Filename fixes**.
 
-**EPUB validation:** `--validate-epubs` checks ZIP integrity, `container.xml`, OPF manifest/spine, and parses spine HTML/XHTML. With `run --execute`, invalid files are deleted from disk and indexed rows (plus cover images) are purged from the database. Dry-run lists them under **Invalid EPUBs** and reports what would be removed. Add `--validate-epubs-deep` to also require Calibre `ebook-meta` to open each file.
+**EPUB validation:** `--validate-epubs` checks ZIP integrity (CRC/decompression), `container.xml`, OPF manifest/spine, and parses spine HTML/XHTML. Validates every indexed on-disk book plus unindexed `.epub` files under scan roots. Progress is printed every 1000 valid files. With `run --execute`, invalid files are deleted from disk and indexed rows (plus cover images) are purged. Dry-run lists them under **Invalid EPUBs**. Add `--validate-epubs-deep` to also require Calibre `ebook-meta` to open each file (slower; needs Calibre on `PATH`).
+
+Use `--validate-epubs-only` to skip dedupe, filename sanitization, and indexing — useful for a periodic integrity pass on a large library. EPUB validation is **not** in the default cron job; run it manually after big imports or on a schedule.
+
+**What validation does not do:** it is not antivirus or malware scanning. It does not audit JavaScript, external links, or every file in the archive — only structural/readability checks. Opening an EPUB in a reader is still a separate trust boundary. Book descriptions in the web UI are escaped as plain text so HTML in metadata cannot run scripts in the browser.
+
+**Suggested workflow for mixed/untrusted sources:**
+
+1. `audit --validate-epubs-only` — read-only count of bad files
+2. `run --validate-epubs-only` — dry-run what would be deleted
+3. `run --execute --validate-epubs-only` — remove corrupt EPUBs and purge DB rows
+
+On very large libraries, run in `screen` or `tmux`; a full pass can take hours.
 
 `audit` uses system Python only; `run --execute` needs the venv for indexing new files.
 

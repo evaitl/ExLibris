@@ -863,6 +863,8 @@ body {
 
 .description__body {
   line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .description__body p {

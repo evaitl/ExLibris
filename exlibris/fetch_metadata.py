@@ -483,3 +483,70 @@ def metadata_db_fields(meta: EbookMeta) -> dict[str, object]:
         "tags": meta.tags,
         "last_scanned_at": now,
     }
+
+
+METADATA_FIELD_NAMES = (
+    "title",
+    "sort_title",
+    "authors",
+    "publisher",
+    "published_date",
+    "isbn",
+    "language",
+    "description",
+    "series",
+    "series_index",
+    "tags",
+)
+
+
+def _metadata_field_nonempty(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def metadata_overwrite_conflicts(
+    book: object,
+    proposed: dict[str, object],
+) -> list[str]:
+    """Field names that would change existing non-empty metadata."""
+    conflicts: list[str] = []
+    for name in METADATA_FIELD_NAMES:
+        new_val = proposed.get(name)
+        if new_val is None:
+            continue
+        old_val = getattr(book, name, None)
+        if _metadata_field_nonempty(old_val) and new_val != old_val:
+            conflicts.append(name)
+    return conflicts
+
+
+def merge_fetched_metadata(
+    book: object,
+    proposed: dict[str, object],
+    *,
+    confirm_overwrite: bool,
+) -> dict[str, object]:
+    """Apply fetched metadata without clearing fields unless confirmed."""
+    result: dict[str, object] = {}
+    last_scanned = proposed.get("last_scanned_at")
+    if last_scanned is not None:
+        result["last_scanned_at"] = last_scanned
+
+    for name in METADATA_FIELD_NAMES:
+        new_val = proposed.get(name)
+        if new_val is None:
+            continue
+        old_val = getattr(book, name, None)
+        if not _metadata_field_nonempty(old_val):
+            result[name] = new_val
+        elif confirm_overwrite and new_val != old_val:
+            result[name] = new_val
+
+    cover_path = proposed.get("cover_path")
+    if cover_path:
+        result["cover_path"] = cover_path
+    return result

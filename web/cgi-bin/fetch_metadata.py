@@ -26,7 +26,12 @@ from exlibris.cgi.common import (
     update_book_fields,
 )
 from exlibris.cgi.render import render_book_detail, render_error
-from exlibris.fetch_metadata import FetchMetadataError, enrich_book_from_online
+from exlibris.fetch_metadata import (
+    FetchMetadataError,
+    enrich_book_from_online,
+    merge_fetched_metadata,
+    metadata_overwrite_conflicts,
+)
 
 
 def _html(body: str) -> None:
@@ -100,6 +105,8 @@ def main() -> None:
             )
         return
 
+    confirm_overwrite = form.getfirst("confirm_overwrite") in ("1", "on", "true", "yes")
+
     try:
         with connect_rw() as conn:
             book = get_book(conn, book_id)
@@ -128,7 +135,32 @@ def main() -> None:
                 isbn=book.isbn,
                 book_id=book_id,
             )
-            update_book_fields(conn, book_id, fields.fields)
+            conflicts = metadata_overwrite_conflicts(book, fields.fields)
+            if conflicts and not confirm_overwrite:
+                current_user, is_favorite = book_detail_context(conn, book_id)
+                conflict_list = ", ".join(conflicts)
+                _html(
+                    _detail_response(
+                        conn,
+                        book,
+                        form,
+                        error=(
+                            "Online metadata would overwrite existing fields "
+                            f"({conflict_list}). Check “Overwrite existing metadata” "
+                            "and try again."
+                        ),
+                        current_user=current_user,
+                        is_favorite=is_favorite,
+                    )
+                )
+                return
+
+            merged = merge_fetched_metadata(
+                book,
+                fields.fields,
+                confirm_overwrite=confirm_overwrite,
+            )
+            update_book_fields(conn, book_id, merged)
 
         with connect() as conn:
             book = get_book(conn, book_id)

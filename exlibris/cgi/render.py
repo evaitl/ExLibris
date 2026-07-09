@@ -762,7 +762,7 @@ def render_book_detail(
     if book.description:
         description = f"""      <section class="description">
         <h2>Description</h2>
-        <div class="description__body">{book.description}</div>
+        <div class="description__body">{esc(book.description)}</div>
       </section>
 """
 
@@ -786,9 +786,13 @@ def render_book_detail(
     fetch_metadata_form = ""
     delete_book_form = ""
     if user_is_admin:
-        fetch_metadata_form = f"""              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fetching…';">
+        fetch_metadata_form = f"""              <form class="book-actions__form book-actions__form--fetch" method="post" action="{esc(fetch_metadata_action())}" onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Fetching…';">
                 <input type="hidden" name="id" value="{book.id}">
                 {browse_hidden}
+                <label class="book-actions__confirm">
+                  <input type="checkbox" name="confirm_overwrite" value="1">
+                  Overwrite existing metadata
+                </label>
                 <button type="submit" class="button button--fetch">Fetch metadata online</button>
               </form>
 """

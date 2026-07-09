@@ -587,6 +587,134 @@ def sort_order_by(sort: str, sort_dir: str) -> str:
     return f"{column} {direction}"
 
 
+def _sort_key_parts(sort: str, sort_dir: str) -> list[tuple[str, str]]:
+    """Sort key expressions and directions; final tie-breaker is books.id ASC."""
+    direction = normalize_sort_dir(sort, sort_dir)
+    if sort == "published":
+        return [
+            ("books.published_date IS NULL", "asc"),
+            ("books.published_date", direction),
+            ("books.id", "asc"),
+        ]
+    if sort == "pages":
+        return [
+            ("books.page_count IS NULL", "asc"),
+            ("books.page_count", direction),
+            ("books.id", "asc"),
+        ]
+    column = SORT_COLUMNS.get(sort, SORT_COLUMNS["title"])
+    return [(column, direction), ("books.id", "asc")]
+
+
+def _fetch_sort_key_values(
+    conn: sqlite3.Connection,
+    book_id: int,
+    parts: list[tuple[str, str]],
+) -> list[object] | None:
+    selects = ", ".join(f"{expr} AS sk{i}" for i, (expr, _) in enumerate(parts))
+    row = conn.execute(
+        f"SELECT {selects} FROM books WHERE id = ? AND is_missing = 0",
+        (book_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return [row[i] for i in range(len(parts))]
+
+
+def _list_order_compare_sql(
+    parts: list[tuple[str, str]],
+    anchor_values: list[object],
+    *,
+    after: bool,
+) -> tuple[str, list[object]]:
+    """SQL condition for rows strictly after/before anchor in library list order."""
+    conditions: list[str] = []
+    params: list[object] = []
+
+    for i, (expr, direction) in enumerate(parts):
+        op = ">" if (direction == "asc") == after else "<"
+        prefix_parts: list[str] = []
+        for j in range(i):
+            ej, _ = parts[j]
+            anchor_j = anchor_values[j]
+            prefix_parts.append(f"(({ej} IS NULL AND ? IS NULL) OR ({ej} = ?))")
+            params.extend([anchor_j, anchor_j])
+
+        if prefix_parts:
+            prefix_sql = " AND ".join(prefix_parts)
+            conditions.append(f"({prefix_sql} AND {expr} {op} ?)")
+        else:
+            conditions.append(f"({expr} {op} ?)")
+        params.append(anchor_values[i])
+
+    return "(" + " OR ".join(conditions) + ")", params
+
+
+def _order_sql(parts: list[tuple[str, str]], *, reverse: bool) -> str:
+    bits: list[str] = []
+    for expr, direction in parts:
+        dir_value = direction
+        if reverse:
+            dir_value = "desc" if direction == "asc" else "asc"
+        bits.append(f"{expr} {dir_value.upper()}")
+    return ", ".join(bits)
+
+
+def _neighbor_id_query(
+    fts_match: str | None,
+    where: list[str],
+    params: list[object],
+    parts: list[tuple[str, str]],
+    anchor_values: list[object],
+    *,
+    after: bool,
+) -> tuple[str, list[object]]:
+    compare_sql, compare_params = _list_order_compare_sql(
+        parts,
+        anchor_values,
+        after=after,
+    )
+    order_sql = _order_sql(parts, reverse=not after)
+    where_sql = " AND ".join(where)
+
+    if fts_match:
+        sql = (
+            "SELECT books.id FROM books "
+            "INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql} AND {compare_sql} "
+            f"ORDER BY {order_sql} LIMIT 1"
+        )
+        query_params: list[object] = [fts_match, *params, *compare_params]
+    else:
+        sql = (
+            f"SELECT books.id FROM books WHERE {where_sql} AND {compare_sql} "
+            f"ORDER BY {order_sql} LIMIT 1"
+        )
+        query_params = [*params, *compare_params]
+    return sql, query_params
+
+
+def _book_in_filtered_view(
+    conn: sqlite3.Connection,
+    book_id: int,
+    fts_match: str | None,
+    where: list[str],
+    params: list[object],
+) -> bool:
+    where_sql = " AND ".join([*where, "books.id = ?"])
+    if fts_match:
+        sql = (
+            "SELECT 1 FROM books "
+            "INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql} LIMIT 1"
+        )
+        query_params: list[object] = [fts_match, *params, book_id]
+    else:
+        sql = f"SELECT 1 FROM books WHERE {where_sql} LIMIT 1"
+        query_params = [*params, book_id]
+    return conn.execute(sql, query_params).fetchone() is not None
+
+
 @dataclass(frozen=True)
 class FilterOptions:
     languages: list[str]
@@ -996,7 +1124,7 @@ def neighbor_book_ids(
     if ctx.sort == "random":
         return None, None
 
-    fts_match, where, params, order_by = _book_filter_clause(
+    fts_match, where, params, _order_by = _book_filter_clause(
         conn,
         title=ctx.title,
         author=ctx.author,
@@ -1008,34 +1136,34 @@ def neighbor_book_ids(
         favorites_only=ctx.favorites_only,
         user_id=user_id,
     )
-    where_sql = " AND ".join(where)
-    if fts_match:
-        from_sql = (
-            "FROM books INNER JOIN books_fts ON books_fts.rowid = books.id "
-            f"WHERE books_fts MATCH ? AND {where_sql}"
-        )
-        query_params: list[object] = [fts_match, *params, book_id]
-    else:
-        from_sql = f"FROM books WHERE {where_sql}"
-        query_params = [*params, book_id]
 
-    sql = f"""
-        WITH ordered AS (
-            SELECT books.id AS id,
-                   ROW_NUMBER() OVER (ORDER BY {order_by}, books.id) AS pos
-            {from_sql}
-        )
-        SELECT prev.id, next.id
-        FROM ordered cur
-        LEFT JOIN ordered prev ON prev.pos = cur.pos - 1
-        LEFT JOIN ordered next ON next.pos = cur.pos + 1
-        WHERE cur.id = ?
-    """
-    row = conn.execute(sql, query_params).fetchone()
-    if row is None:
+    parts = _sort_key_parts(ctx.sort, ctx.sort_dir)
+    anchor_values = _fetch_sort_key_values(conn, book_id, parts)
+    if anchor_values is None:
         return None, None
-    prev_id = int(row[0]) if row[0] is not None else None
-    next_id = int(row[1]) if row[1] is not None else None
+    if not _book_in_filtered_view(conn, book_id, fts_match, where, params):
+        return None, None
+
+    prev_sql, prev_params = _neighbor_id_query(
+        fts_match,
+        where,
+        params,
+        parts,
+        anchor_values,
+        after=False,
+    )
+    next_sql, next_params = _neighbor_id_query(
+        fts_match,
+        where,
+        params,
+        parts,
+        anchor_values,
+        after=True,
+    )
+    prev_row = conn.execute(prev_sql, prev_params).fetchone()
+    next_row = conn.execute(next_sql, next_params).fetchone()
+    prev_id = int(prev_row[0]) if prev_row is not None else None
+    next_id = int(next_row[0]) if next_row is not None else None
     return prev_id, next_id
 
 
