@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def get_engine(db_path: Path) -> Engine:
@@ -112,12 +112,20 @@ def upsert_book(session: Session, data: dict) -> Book:
     )
     if existing:
         preserved = {"first_seen_at": existing.first_seen_at}
+        file_changed = (
+            existing.file_size != data.get("file_size", existing.file_size)
+            or existing.file_mtime != data.get("file_mtime", existing.file_mtime)
+            or existing.content_hash != data.get("content_hash", existing.content_hash)
+        )
         for key, value in data.items():
             if key == "first_seen_at":
                 continue
             setattr(existing, key, value)
         existing.first_seen_at = preserved["first_seen_at"]
         existing.is_missing = False
+        if file_changed:
+            existing.epub_validated = False
+            existing.epub_deep_validated = False
         session.add(existing)
         return existing
 

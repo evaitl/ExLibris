@@ -71,3 +71,7 @@ class Book(Base):
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False)
     last_scanned_at: Mapped[datetime] = mapped_column(nullable=False)
     is_missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    epub_validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    epub_deep_validated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )

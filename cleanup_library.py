@@ -228,15 +228,21 @@ def _validate_epubs(
     quiet: bool = False,
     verbose: bool = False,
 ) -> tuple[list[str], list[str]]:
-    paths = collect_epub_paths_for_validation(conn, scan_roots)
-    if not quiet and paths:
-        _log(f"Validating {len(paths)} EPUB(s)...")
+    paths, skipped = collect_epub_paths_for_validation(
+        conn, scan_roots, deep=deep
+    )
+    if not quiet:
+        if skipped:
+            _log(f"Skipping {skipped} already-validated EPUB(s)")
+        if paths:
+            _log(f"Validating {len(paths)} EPUB(s)...")
     on_invalid, on_valid_progress = _epub_validation_live_callbacks(quiet=quiet)
     invalid, errors = audit_epub_integrity(
         paths,
         path_to_book_id=build_path_to_book_id(conn),
         deep=deep,
         ebook_meta_cmd=ebook_meta,
+        conn=conn,
         on_invalid=on_invalid,
         on_valid_progress=on_valid_progress,
     )
@@ -256,15 +262,21 @@ def _run_epub_validation_pass(
 ) -> tuple[CleanupResult, list[str]]:
     """Validate EPUBs and optionally remove invalid files/rows."""
     result = CleanupResult()
-    paths = collect_epub_paths_for_validation(conn, scan_roots)
-    if not quiet and paths:
-        _log(f"Validating {len(paths)} EPUB(s)...")
+    paths, skipped = collect_epub_paths_for_validation(
+        conn, scan_roots, deep=deep
+    )
+    if not quiet:
+        if skipped:
+            _log(f"Skipping {skipped} already-validated EPUB(s)")
+        if paths:
+            _log(f"Validating {len(paths)} EPUB(s)...")
     on_invalid, on_valid_progress = _epub_validation_live_callbacks(quiet=quiet)
     invalid_items, validate_errors = audit_epub_integrity(
         paths,
         path_to_book_id=build_path_to_book_id(conn),
         deep=deep,
         ebook_meta_cmd=ebook_meta,
+        conn=conn,
         on_invalid=on_invalid,
         on_valid_progress=on_valid_progress,
     )
@@ -588,9 +600,16 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         invalid_items = []
         if args.validate_epubs:
-            paths = collect_epub_paths_for_validation(conn, scan_roots)
-            if not args.quiet and paths:
-                _log(f"Validating {len(paths)} EPUB(s)...")
+            paths, skipped = collect_epub_paths_for_validation(
+                conn,
+                scan_roots,
+                deep=args.validate_epubs_deep,
+            )
+            if not args.quiet:
+                if skipped:
+                    _log(f"Skipping {skipped} already-validated EPUB(s)")
+                if paths:
+                    _log(f"Validating {len(paths)} EPUB(s)...")
             on_invalid, on_valid_progress = _epub_validation_live_callbacks(
                 quiet=args.quiet
             )
@@ -599,6 +618,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 path_to_book_id=build_path_to_book_id(conn),
                 deep=args.validate_epubs_deep,
                 ebook_meta_cmd=args.ebook_meta,
+                conn=conn,
                 on_invalid=on_invalid,
                 on_valid_progress=on_valid_progress,
             )

@@ -31,7 +31,7 @@ scan_books.py       ← standalone scan entry point
 cleanup_library.py  ← audit/reconcile files vs database
 manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/
-  schema/           ← SQL migrations (001–008)
+  schema/           ← SQL migrations (001–009)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
   auth.py           ← scrypt passwords, signed session cookies
@@ -313,7 +313,7 @@ Structural validation only — not malware scanning. Checks:
 
 `--validate-epubs-deep` adds Calibre `ebook-meta` (must open the file). Does **not** scan JS, zip bombs, or non-spine assets.
 
-`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. `audit_epub_integrity()` reports progress every 1000 valid EPUBs.
+`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. Indexed books with `epub_validated` / `epub_deep_validated` set are skipped on later runs (migration 009). Flags are cleared when the file path, size, mtime, or content hash changes. `audit_epub_integrity()` reports progress every 1000 valid EPUBs and records validation flags in batches.
 
 Recommended manual schedule on large libraries: `audit --validate-epubs-only` → dry-run `run --validate-epubs-only` → `run --execute --validate-epubs-only`. Not part of default cron (too slow for nightly runs on ~500K books).
 

@@ -243,14 +243,27 @@ def update_book_path(
     """Point an existing row at a new file path without re-extracting metadata."""
     keeper = keeper.resolve()
     stat = keeper.stat()
-    conn.execute(
-        """
-        UPDATE books
-        SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?, is_missing = 0
-        WHERE id = ?
-        """,
-        (str(keeper), keeper.name, stat.st_size, stat.st_mtime, book_id),
-    )
+    params = (str(keeper), keeper.name, stat.st_size, stat.st_mtime, book_id)
+    try:
+        conn.execute(
+            """
+            UPDATE books
+            SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                is_missing = 0, epub_validated = 0, epub_deep_validated = 0
+            WHERE id = ?
+            """,
+            params,
+        )
+    except sqlite3.OperationalError:
+        conn.execute(
+            """
+            UPDATE books
+            SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                is_missing = 0
+            WHERE id = ?
+            """,
+            params,
+        )
     conn.commit()
 
 
@@ -454,12 +467,46 @@ def sanitize_book_filenames(
     return updated, errors
 
 
+def mark_epub_validated_batch(
+    conn: sqlite3.Connection,
+    book_ids: list[int],
+    *,
+    deep: bool,
+) -> None:
+    """Record successful EPUB validation for indexed books."""
+    if not book_ids:
+        return
+    try:
+        placeholders = ",".join("?" * len(book_ids))
+        if deep:
+            conn.execute(
+                f"""
+                UPDATE books
+                SET epub_validated = 1, epub_deep_validated = 1
+                WHERE id IN ({placeholders})
+                """,
+                book_ids,
+            )
+        else:
+            conn.execute(
+                f"""
+                UPDATE books SET epub_validated = 1
+                WHERE id IN ({placeholders})
+                """,
+                book_ids,
+            )
+        conn.commit()
+    except sqlite3.OperationalError:
+        return
+
+
 def audit_epub_integrity(
     paths: list[Path],
     *,
     path_to_book_id: dict[str, int] | None = None,
     deep: bool = False,
     ebook_meta_cmd: str | None = None,
+    conn: sqlite3.Connection | None = None,
     on_progress: ProgressCallback | None = None,
     on_invalid: InvalidEpubCallback | None = None,
     on_valid_progress: ValidEpubProgressCallback | None = None,
@@ -469,7 +516,8 @@ def audit_epub_integrity(
 
     ``on_invalid`` is called as soon as each invalid EPUB is found.
     ``on_valid_progress`` is called after every ``valid_progress_interval``
-    valid EPUBs (default 1000).
+    valid EPUBs (default 1000). When ``conn`` is provided, indexed books that
+    pass validation are marked so later runs can skip them.
     """
     path_to_book_id = path_to_book_id or {}
     invalid: list[InvalidEpub] = []
@@ -477,6 +525,7 @@ def audit_epub_integrity(
     ordered = sorted(paths, key=lambda item: str(item).lower())
     total = len(ordered)
     valid_count = 0
+    validated_ids: list[int] = []
     for index, path in enumerate(ordered, start=1):
         if on_progress is not None:
             on_progress(index, total, path.name)
@@ -501,12 +550,20 @@ def audit_epub_integrity(
                 on_invalid(item)
             continue
         valid_count += 1
+        book_id = path_to_book_id.get(str(path.resolve()))
+        if conn is not None and book_id is not None:
+            validated_ids.append(book_id)
+            if len(validated_ids) >= valid_progress_interval:
+                mark_epub_validated_batch(conn, validated_ids, deep=deep)
+                validated_ids.clear()
         if (
             on_valid_progress is not None
             and valid_progress_interval > 0
             and valid_count % valid_progress_interval == 0
         ):
             on_valid_progress(valid_count, total)
+    if conn is not None and validated_ids:
+        mark_epub_validated_batch(conn, validated_ids, deep=deep)
     return invalid, errors
 
 
@@ -579,23 +636,59 @@ def remove_invalid_epubs(
 def collect_epub_paths_for_validation(
     conn: sqlite3.Connection,
     scan_roots: list[Path],
-) -> list[Path]:
-    """Indexed on-disk books plus unindexed EPUBs under scan roots."""
+    *,
+    deep: bool = False,
+) -> tuple[list[Path], int]:
+    """Indexed on-disk books plus unindexed EPUBs under scan roots.
+
+    Returns (paths to validate, skipped indexed books already validated).
+    """
     paths: list[Path] = []
     seen: set[str] = set()
-    for row in _filename_fixup_rows(conn):
-        path = Path(row.file_path)
+    skipped = 0
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, file_path, epub_validated, epub_deep_validated
+            FROM books
+            WHERE is_missing = 0
+            ORDER BY id
+            """
+        ).fetchall()
+        has_validation_columns = True
+    except sqlite3.OperationalError:
+        has_validation_columns = False
+        rows = conn.execute(
+            """
+            SELECT id, file_path
+            FROM books
+            WHERE is_missing = 0
+            ORDER BY id
+            """
+        ).fetchall()
+
+    for row in rows:
+        path = Path(str(row["file_path"]))
         if not path.is_file():
             continue
         resolved = path.resolve()
         if not path_is_under_any_root(resolved, scan_roots):
             continue
         key = str(resolved)
+        if has_validation_columns:
+            if deep and int(row["epub_deep_validated"]):
+                skipped += 1
+                seen.add(key)
+                continue
+            if not deep and int(row["epub_validated"]):
+                skipped += 1
+                seen.add(key)
+                continue
         if key not in seen:
             seen.add(key)
             paths.append(resolved)
 
-    disk_files, _, path_errors = collect_book_files(
+    disk_files, _, _path_errors = collect_book_files(
         scan_roots,
         resolve_path=lambda item: item.resolve(),
     )
@@ -604,7 +697,7 @@ def collect_epub_paths_for_validation(
         if key not in seen:
             seen.add(key)
             paths.append(path)
-    return paths
+    return paths, skipped
 
 
 def backfill_content_hashes(
@@ -641,10 +734,17 @@ def backfill_content_hashes(
             )
             continue
         if execute:
-            conn.execute(
-                "UPDATE books SET content_hash = ? WHERE id = ?",
-                (content_hash, book.id),
-            )
+            try:
+                conn.execute(
+                    "UPDATE books SET content_hash = ?, epub_validated = 0, "
+                    "epub_deep_validated = 0 WHERE id = ?",
+                    (content_hash, book.id),
+                )
+            except sqlite3.OperationalError:
+                conn.execute(
+                    "UPDATE books SET content_hash = ? WHERE id = ?",
+                    (content_hash, book.id),
+                )
             conn.commit()
         updated += 1
     return updated, errors
