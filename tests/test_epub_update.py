@@ -130,6 +130,7 @@ def test_update_epubs_execute_marks_converted() -> None:
         assert int(row["epub_version2"]) == 1
         assert int(row["epub_validated"]) == 1
         assert row["content_hash"] != "abc"
+        assert oct(path.stat().st_mode & 0o777) == "0o644"
         conn.close()
 
 

@@ -21,6 +21,7 @@ UpdateStartCallback = Callable[[int, int], None]
 UpdateEventCallback = Callable[[int, int, str, str, str], None]
 
 SUCCESS_LOG_INTERVAL = 100
+EPUB_FILE_MODE = 0o644
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,7 @@ def update_epubs(
             )
             os.replace(temp_path, path)
             temp_path = None
+            os.chmod(path, EPUB_FILE_MODE)
             validation = validate_epub_structure(path)
             if not validation.ok:
                 detail = "; ".join(validation.errors) or "EPUB validation failed"
