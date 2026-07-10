@@ -307,6 +307,8 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 
 `audit` and dedupe/repoint use sqlite3 + `sha1_file` (no venv). Indexing new files needs venv + Calibre.
 
+Cleanup connections set `PRAGMA busy_timeout` and WAL mode; writes retry on `database is locked` / `database is busy` so cleanup can run while the web UI is in use.
+
 ### EPUB validation (`exlibris/epub_validate.py`)
 
 Structural validation only — not malware scanning. Checks:

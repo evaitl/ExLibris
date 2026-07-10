@@ -28,6 +28,7 @@ from exlibris.cleanup import (
     strip_book_descriptions,
 )
 from exlibris.book_paths import prune_empty_directories
+from exlibris.sqlite_retry import configure_sqlite_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -84,7 +85,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    configure_sqlite_connection(conn)
     return conn
 
 

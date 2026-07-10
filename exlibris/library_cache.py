@@ -6,6 +6,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from exlibris.sqlite_retry import run_write_with_retry
+
 
 def _load_languages(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
@@ -30,18 +32,21 @@ def refresh_library_stats(conn: sqlite3.Connection) -> None:
         )
         languages = _load_languages(conn)
         refreshed_at = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            """
-            INSERT INTO library_stats (id, library_total, languages, refreshed_at)
-            VALUES (1, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                library_total = excluded.library_total,
-                languages = excluded.languages,
-                refreshed_at = excluded.refreshed_at
-            """,
-            (library_total, json.dumps(languages), refreshed_at),
-        )
-        conn.commit()
+
+        def writer() -> None:
+            conn.execute(
+                """
+                INSERT INTO library_stats (id, library_total, languages, refreshed_at)
+                VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    library_total = excluded.library_total,
+                    languages = excluded.languages,
+                    refreshed_at = excluded.refreshed_at
+                """,
+                (library_total, json.dumps(languages), refreshed_at),
+            )
+
+        run_write_with_retry(conn, writer)
     except sqlite3.OperationalError:
         return
 

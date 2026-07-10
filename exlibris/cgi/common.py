@@ -18,6 +18,7 @@ from exlibris.auth import (
     parse_session_token,
     session_secret,
 )
+from exlibris.sqlite_retry import configure_sqlite_connection
 from exlibris.author_tokens import author_tokens_available, sync_author_tokens
 from exlibris.cgi.search import (
     append_author_token_filters,
@@ -228,6 +229,7 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA cache_size = -64000")
     conn.execute("PRAGMA mmap_size = 268435456")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -238,7 +240,7 @@ def connect_rw() -> sqlite3.Connection:
     try:
         conn = sqlite3.connect(db)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+        configure_sqlite_connection(conn)
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("ROLLBACK")
     except sqlite3.OperationalError as exc:

@@ -37,6 +37,7 @@ from exlibris.filenames import (
 )
 from exlibris.file_hash import sha1_file
 from exlibris.description_text import description_needs_plaintext, plain_text_description
+from exlibris.sqlite_retry import is_sqlite_locked, run_write_with_retry
 
 
 @dataclass(frozen=True)
@@ -260,27 +261,32 @@ def update_book_path(
     keeper = keeper.resolve()
     stat = keeper.stat()
     params = (str(keeper), keeper.name, stat.st_size, stat.st_mtime, book_id)
-    try:
-        conn.execute(
-            """
-            UPDATE books
-            SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
-                is_missing = 0, epub_validated = 0, epub_deep_validated = 0
-            WHERE id = ?
-            """,
-            params,
-        )
-    except sqlite3.OperationalError:
-        conn.execute(
-            """
-            UPDATE books
-            SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
-                is_missing = 0
-            WHERE id = ?
-            """,
-            params,
-        )
-    conn.commit()
+
+    def writer() -> None:
+        try:
+            conn.execute(
+                """
+                UPDATE books
+                SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                    is_missing = 0, epub_validated = 0, epub_deep_validated = 0
+                WHERE id = ?
+                """,
+                params,
+            )
+        except sqlite3.OperationalError as exc:
+            if is_sqlite_locked(exc):
+                raise
+            conn.execute(
+                """
+                UPDATE books
+                SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                    is_missing = 0
+                WHERE id = ?
+                """,
+                params,
+            )
+
+    run_write_with_retry(conn, writer)
 
 
 def purge_book(conn: sqlite3.Connection, book_id: int) -> int:
@@ -289,8 +295,11 @@ def purge_book(conn: sqlite3.Connection, book_id: int) -> int:
         (book_id,),
     ).fetchone()
     favorites = int(row[0]) if row else 0
-    conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
-    conn.commit()
+
+    def writer() -> None:
+        conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
+
+    run_write_with_retry(conn, writer)
     refresh_library_stats(conn)
     return favorites
 
@@ -494,24 +503,27 @@ def mark_epub_validated_batch(
         return
     try:
         placeholders = ",".join("?" * len(book_ids))
-        if deep:
-            conn.execute(
-                f"""
-                UPDATE books
-                SET epub_validated = 1, epub_deep_validated = 1
-                WHERE id IN ({placeholders})
-                """,
-                book_ids,
-            )
-        else:
-            conn.execute(
-                f"""
-                UPDATE books SET epub_validated = 1
-                WHERE id IN ({placeholders})
-                """,
-                book_ids,
-            )
-        conn.commit()
+
+        def writer() -> None:
+            if deep:
+                conn.execute(
+                    f"""
+                    UPDATE books
+                    SET epub_validated = 1, epub_deep_validated = 1
+                    WHERE id IN ({placeholders})
+                    """,
+                    book_ids,
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE books SET epub_validated = 1
+                    WHERE id IN ({placeholders})
+                    """,
+                    book_ids,
+                )
+
+        run_write_with_retry(conn, writer)
     except sqlite3.OperationalError:
         return
 
@@ -773,18 +785,22 @@ def backfill_content_hashes(
             )
             continue
         if execute:
-            try:
-                conn.execute(
-                    "UPDATE books SET content_hash = ?, epub_validated = 0, "
-                    "epub_deep_validated = 0 WHERE id = ?",
-                    (content_hash, book.id),
-                )
-            except sqlite3.OperationalError:
-                conn.execute(
-                    "UPDATE books SET content_hash = ? WHERE id = ?",
-                    (content_hash, book.id),
-                )
-            conn.commit()
+            def writer() -> None:
+                try:
+                    conn.execute(
+                        "UPDATE books SET content_hash = ?, epub_validated = 0, "
+                        "epub_deep_validated = 0 WHERE id = ?",
+                        (content_hash, book.id),
+                    )
+                except sqlite3.OperationalError as exc:
+                    if is_sqlite_locked(exc):
+                        raise
+                    conn.execute(
+                        "UPDATE books SET content_hash = ? WHERE id = ?",
+                        (content_hash, book.id),
+                    )
+
+            run_write_with_retry(conn, writer)
         updated += 1
     return updated, errors
 
@@ -817,10 +833,12 @@ def strip_book_descriptions(
             continue
         cleaned = plain_text_description(original)
         if execute:
-            conn.execute(
-                "UPDATE books SET description = ? WHERE id = ?",
-                (cleaned, book_id),
+            run_write_with_retry(
+                conn,
+                lambda cleaned=cleaned, book_id=book_id: conn.execute(
+                    "UPDATE books SET description = ? WHERE id = ?",
+                    (cleaned, book_id),
+                ),
             )
-            conn.commit()
         updated += 1
     return updated, errors
