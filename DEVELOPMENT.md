@@ -263,6 +263,7 @@ exlibris cleanup audit                     # read-only file vs DB report
 exlibris cleanup run --execute             # dedupe, index new EPUBs (dry-run without --execute)
 exlibris cleanup run --execute \
   --backfill-hashes --prune-empty-dirs     # also fill NULL content_hash, prune empty dirs
+exlibris cleanup run --execute --strip-description-html  # plain-text DB descriptions
 exlibris cleanup run --execute --validate-epubs  # remove corrupt EPUBs + DB rows (destructive)
 exlibris cleanup audit --validate-epubs-only     # report invalid EPUBs only (read-only)
 exlibris cleanup run --execute --validate-epubs-only  # remove bad EPUBs; skip other cleanup
@@ -297,6 +298,10 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 | Dedupe | SHA-1 match → keep longest basename; delete shorter copies; repoint DB (no Calibre) |
 | Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover); scan and cleanup indexing validate EPUB structure first and delete invalid files under scan roots |
 | Backfill | `--backfill-hashes`: SHA-1 for rows with `content_hash IS NULL` |
+| Descriptions | `--strip-description-html`: remove HTML tags and decode HTML entities in `books.description` (commits per row) |
+
+**Description cleanup** (`exlibris/description_text.py`): decodes HTML entities (including double-encoded), strips tags (script/style content dropped), collapses whitespace, and sets empty results to `NULL`. The web UI still escapes descriptions as plain text; this option cleans stored metadata for readability and search. Dry-run by default; use `run --execute --strip-description-html`. Not part of default cron.
+
 | Prune | `--prune-empty-dirs`: remove empty directories under scan roots |
 | Purge | `--force-clean`: DELETE rows whose `file_path` is not a regular file |
 

@@ -36,6 +36,7 @@ from exlibris.filenames import (
     unique_target_path,
 )
 from exlibris.file_hash import sha1_file
+from exlibris.description_text import description_needs_plaintext, plain_text_description
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class CleanupResult:
     filenames_sanitized: int = 0
     invalid_epubs: int = 0
     dirs_pruned: int = 0
+    descriptions_stripped: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -782,6 +784,43 @@ def backfill_content_hashes(
                     "UPDATE books SET content_hash = ? WHERE id = ?",
                     (content_hash, book.id),
                 )
+            conn.commit()
+        updated += 1
+    return updated, errors
+
+
+def strip_book_descriptions(
+    conn: sqlite3.Connection,
+    *,
+    execute: bool,
+    on_progress: ProgressCallback | None = None,
+) -> tuple[int, list[str]]:
+    """Replace HTML descriptions with plain text (tags removed, entities decoded)."""
+    errors: list[str] = []
+    updated = 0
+    rows = conn.execute(
+        """
+        SELECT id, file_name, description
+        FROM books
+        WHERE description IS NOT NULL AND description != ''
+        ORDER BY id
+        """
+    ).fetchall()
+    total = len(rows)
+    for index, row in enumerate(rows, start=1):
+        book_id = int(row["id"])
+        label = str(row["file_name"])
+        original = str(row["description"])
+        if on_progress is not None:
+            on_progress(index, total, label)
+        if not description_needs_plaintext(original):
+            continue
+        cleaned = plain_text_description(original)
+        if execute:
+            conn.execute(
+                "UPDATE books SET description = ? WHERE id = ?",
+                (cleaned, book_id),
+            )
             conn.commit()
         updated += 1
     return updated, errors

@@ -224,6 +224,7 @@ Incremental scans are quick when nothing changed.
 | Dry-run | `./cleanup_library.py run` |
 | Apply dedupe + index new EPUBs | `./cleanup_library.py run --execute` |
 | Also backfill SHA-1, prune empty dirs | add `--backfill-hashes --prune-empty-dirs` |
+| Strip HTML from descriptions | add `--strip-description-html` |
 | Sanitize filenames + update DB paths | included in `run` (dry-run or `--execute`) |
 | Validate EPUB structure / readability | add `--validate-epubs` (optional `--validate-epubs-deep`) |
 | Validate EPUBs only (skip dedupe/index) | `--validate-epubs-only` |
@@ -236,8 +237,10 @@ Incremental scans are quick when nothing changed.
 ./cleanup_library.py run --validate-epubs-only            # dry-run removal only
 ./cleanup_library.py run --execute --validate-epubs-only    # remove bad EPUBs; no other cleanup
 ./cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs
+./cleanup_library.py run --execute --strip-description-html   # plain-text descriptions
 ./cleanup_library.py run --execute --validate-epubs       # full cleanup + remove bad EPUBs
 exlibris cleanup run --execute --backfill-hashes --prune-empty-dirs
+exlibris cleanup run --execute --strip-description-html
 ```
 
 Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force-clean` and `--validate-epubs` with `--execute` are destructive (remove files and/or DB rows). Run a dry-run first on large libraries.
@@ -249,6 +252,8 @@ Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force
 **New EPUBs:** files on disk with no hash match are indexed via the same logic as `exlibris scan` (needs venv + Calibre).
 
 **Filenames:** `run` renames unsafe characters and very short basenames (stem &lt; 10 characters) to `{title} - {authors}-({publisher}).epub`, then updates `file_path` and `file_name` in the database. `audit` lists planned renames under **Filename fixes**.
+
+**Descriptions:** `--strip-description-html` converts stored book descriptions to plain text: HTML tags are removed, HTML entities are decoded (`&amp;`, `&#39;`, etc.), and whitespace is normalized. Empty results become `NULL`. Updates commit per row so interrupted runs keep progress. The web UI always escapes descriptions when rendering; this flag cleans the database copy (useful after imports from Calibre or online metadata). Dry-run first: `run --strip-description-html`, then `run --execute --strip-description-html`.
 
 **EPUB validation:** `--validate-epubs` checks ZIP integrity (CRC/decompression), `container.xml`, OPF manifest/spine, and parses spine HTML/XHTML. Validates every indexed on-disk book plus unindexed `.epub` files under scan roots. Indexed books that pass are recorded in the database (`epub_validated` / `epub_deep_validated`, migration 009) and skipped on later runs until the file changes. Progress is printed every 1000 valid files. With `run --execute`, invalid files are deleted from disk and indexed rows (plus cover images) are purged. Dry-run lists them under **Invalid EPUBs**. Add `--validate-epubs-deep` to also require Calibre `ebook-meta` to open each file (slower; needs Calibre on `PATH`).
 

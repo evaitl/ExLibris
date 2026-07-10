@@ -25,6 +25,7 @@ from exlibris.cleanup import (
     load_books,
     purge_book,
     sanitize_book_filenames,
+    strip_book_descriptions,
 )
 from exlibris.book_paths import prune_empty_directories
 
@@ -574,6 +575,24 @@ def cmd_run(args: argparse.Namespace) -> int:
                 verb = "backfilled" if execute else "would backfill"
                 _log(f"{verb} {updated} content hash(es)")
 
+        if args.strip_description_html:
+            if not args.quiet:
+                _log("Stripping HTML from book descriptions...")
+            stripped, strip_errors = strip_book_descriptions(
+                conn,
+                execute=execute,
+                on_progress=_progress_callback(
+                    quiet=args.quiet,
+                    verbose=args.verbose,
+                    label="description",
+                ),
+            )
+            result.descriptions_stripped = stripped
+            result.errors.extend(strip_errors)
+            if not args.quiet:
+                verb = "stripped" if execute else "would strip"
+                _log(f"{verb} {stripped} description(s)")
+
         if not args.quiet:
             _log("Sanitizing filenames...")
         sanitized, sanitize_errors = sanitize_book_filenames(
@@ -748,6 +767,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"{result.rows_indexed} row(s) indexed, "
             f"{result.hashes_backfilled} hash(es) backfilled, "
             f"{result.filenames_sanitized} filename(s) sanitized, "
+            f"{result.descriptions_stripped} description(s) stripped, "
             f"{result.invalid_epubs} invalid EPUB(s), "
             f"{result.dirs_pruned} empty dir(s) pruned, "
             f"{result.rows_purged} row(s) purged, "
@@ -827,6 +847,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--backfill-hashes",
         action="store_true",
         help="Compute SHA-1 for rows with NULL content_hash",
+    )
+    run_parser.add_argument(
+        "--strip-description-html",
+        action="store_true",
+        help="Remove HTML tags and decode HTML entities in book descriptions",
     )
     run_parser.add_argument(
         "--prune-empty-dirs",

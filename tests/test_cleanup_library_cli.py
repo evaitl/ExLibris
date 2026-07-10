@@ -24,6 +24,13 @@ def test_parse_args_validate_epubs_only_on_run() -> None:
     assert args.validate_epubs_only is True
 
 
+def test_parse_args_strip_description_html_on_run() -> None:
+    module = _load_cleanup_module()
+    args = module.parse_args(["run", "--strip-description-html"])
+    assert args.command == "run"
+    assert args.strip_description_html is True
+
+
 def test_normalize_validate_epubs_only_enables_validate_epubs() -> None:
     module = _load_cleanup_module()
     args = module.parse_args(["run", "--validate-epubs-only"])
