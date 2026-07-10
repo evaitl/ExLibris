@@ -42,7 +42,7 @@ Create the runtime data directory:
 Optional: copy the example config and edit it:
 
 ```bash
-cp config.yaml.example config.yaml
+cp config.json.example config.json
 cp admins.txt.example admins.txt   # then add admin usernames
 ```
 
@@ -81,7 +81,7 @@ Create the directory if needed: `sudo mkdir -p /media/books`
 
 ## Scan the library
 
-The scanner needs the project virtualenv (pydantic, SQLAlchemy, etc.). `scan_books.py` re-runs itself with `.venv/bin/python` when you invoke it with system Python.
+The scanner needs the project virtualenv (SQLAlchemy, Typer, etc.). `scan_books.py` re-runs itself with `.venv/bin/python` when you invoke it with system Python.
 
 ```bash
 python3 -m venv .venv
@@ -269,7 +269,7 @@ Use `--validate-epubs-only` to skip dedupe, filename sanitization, and indexing 
 
 On very large libraries, run in `screen` or `tmux`; a full pass can take hours.
 
-`audit` uses system Python only; `run --execute` needs the venv for indexing new files.
+`audit` uses system Python only; `run --execute` indexes new files via Calibre and re-runs itself with `.venv/bin/python` when started without the venv (same as `scan_books.py`).
 
 ### User account maintenance
 
@@ -395,7 +395,7 @@ If that fails, install Calibre system-wide or symlink the binary into `/usr/loca
 
 ## Configuration
 
-`config.yaml` settings:
+`config.json` settings:
 
 | Field | Description |
 |-------|-------------|
@@ -403,7 +403,9 @@ If that fails, install Calibre system-wide or symlink the binary into `/usr/loca
 | `database_path` | SQLite database file (default: `data/library.db`) |
 | `covers_dir` | Cover images directory (default: `data/covers`) |
 
-Environment variables (prefix `EXLIBRIS_`) override config values, for example `EXLIBRIS_DATABASE_PATH`.
+Copy `config.json.example` to `config.json` and edit as needed. If you still have `config.yaml` from an older install, convert it to JSON (same field names) or rely on environment variables.
+
+Environment variables override config values, for example `EXLIBRIS_DATABASE_PATH` and `EXLIBRIS_SCAN_PATHS` (paths separated with `:` on Linux).
 
 ## How it works
 

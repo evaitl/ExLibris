@@ -16,7 +16,7 @@ def _ensure_project_python() -> None:
     if os.environ.get("EXLIBRIS_REEXEC") == "1":
         return
     try:
-        import pydantic  # noqa: F401
+        import sqlalchemy  # noqa: F401
     except ModuleNotFoundError:
         if _VENV_PYTHON.is_file():
             os.environ["EXLIBRIS_REEXEC"] = "1"
@@ -58,14 +58,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-d",
         type=Path,
         default=None,
-        help="SQLite database path (default: data/library.db or config.yaml value)",
+        help="SQLite database path (default: data/library.db or config.json value)",
     )
     parser.add_argument(
         "--config",
         "-c",
         type=Path,
         default=None,
-        help="Optional config.yaml for database_path and scan_paths defaults",
+        help="Optional config.json for database_path and scan_paths defaults",
     )
     parser.add_argument(
         "--ebook-meta",

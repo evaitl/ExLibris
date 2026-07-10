@@ -15,7 +15,7 @@ def _ensure_project_python() -> None:
     if os.environ.get("EXLIBRIS_REEXEC") == "1":
         return
     try:
-        import pydantic  # noqa: F401
+        import sqlalchemy  # noqa: F401
     except ModuleNotFoundError:
         if _VENV_PYTHON.is_file():
             os.environ["EXLIBRIS_REEXEC"] = "1"

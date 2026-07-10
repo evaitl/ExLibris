@@ -103,7 +103,7 @@ web/
 - **`apache/exlibris.conf`** for `/exlibris/` mount
 - **Removed dead code:** FastAPI, `exlibris/extractors/`, broken `httpd.conf`
 - **Cron:** `scripts/scan-library.sh` for nightly scans; logs to `data/scan.log`
-- **CGI without pydantic:** `exlibris/cgi/common.py` avoids importing `exlibris.config` so Apache system Python works for the web UI
+- **CGI config:** `exlibris/cgi/common.py` loads `config.json` via stdlib-only `exlibris.config` (no extra packages on the web UI path)
 
 ---
 
@@ -124,7 +124,7 @@ This session continued after the initial release, deploying to a production serv
 | `AH01630: client denied … /home/evaitl/programming` | `EXLIBRIS_ROOT` in copied `exlibris.conf` still pointed at dev machine path | Set `Define EXLIBRIS_ROOT /media/books/ExLibris` in `/etc/apache2/conf-available/exlibris.conf` |
 | `AH01630` under `/home/...` | `www-data` cannot traverse home directory | Move install to `/media/books/ExLibris` or `chmod o+x` on parent dirs |
 | `ScriptAlias … will probably never match` | Broad `Alias /exlibris/` listed before `ScriptAlias` | Put `ScriptAlias` **before** `Alias` in config |
-| `ModuleNotFoundError: No module named 'pydantic'` on fetch | `allowed_book_file()` imported `exlibris.config` | Removed pydantic from CGI code path (`common.py`, `fetch_metadata.py`) |
+| `ModuleNotFoundError: No module named 'pydantic'` on fetch | `allowed_book_file()` imported `exlibris.config` when config used pydantic | Config is JSON + stdlib; CGI imports `exlibris.config` safely |
 | Database read-only for web server | `library.db` files owned by user, mode `644` | `sudo usermod -aG evaitl www-data`; `chmod g+rw data/library.db*` |
 | Fetch replaces cover with blank | Open Library returns 1×1 transparent GIF (~807 bytes) when no cover | See § Fetch metadata cover handling below |
 
@@ -239,7 +239,7 @@ Key `books` columns: `file_path`, `content_hash`, `title`, `authors`, `publisher
 
 ## Dependencies
 
-**Python (pyproject.toml):** typer, pydantic-settings, sqlalchemy, pyyaml
+**Python (pyproject.toml):** typer, sqlalchemy
 
 **System:** Calibre (`ebook-meta`, `fetch-ebook-metadata` on PATH)
 
@@ -305,7 +305,7 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 | Prune | `--prune-empty-dirs`: remove empty directories under scan roots |
 | Purge | `--force-clean`: DELETE rows whose `file_path` is not a regular file |
 
-`audit` and dedupe/repoint use sqlite3 + `sha1_file` (no venv). Indexing new files needs venv + Calibre.
+`audit` and dedupe/repoint use sqlite3 + `sha1_file` (no venv). Indexing new files needs venv + Calibre; `cleanup_library.py` re-execs with `.venv/bin/python` when SQLAlchemy is missing.
 
 Cleanup connections set `PRAGMA busy_timeout` and WAL mode; writes retry on `database is locked` / `database is busy` so cleanup can run while the web UI is in use.
 
@@ -354,7 +354,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - **POST context:** `lib_*` hidden fields preserve browse order through edit, fetch, restore, and favorite actions
 - **Pages sort:** `page_count` in sort dropdown
 - **`detail.js` / `swipe-nav.js`:** keyboard and touch navigation on detail pages
-- **CGI path:** `admins.py` resolves paths without importing `exlibris.config` (no pydantic on web UI)
+- **CGI path:** `exlibris.config` is stdlib JSON; `admins.py` still resolves paths without heavy scanner deps where possible
 
 ---
 

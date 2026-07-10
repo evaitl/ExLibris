@@ -31,6 +31,20 @@ def test_parse_args_strip_description_html_on_run() -> None:
     assert args.strip_description_html is True
 
 
+def test_ensure_project_python_skips_after_reexec(monkeypatch) -> None:
+    module = _load_cleanup_module()
+    monkeypatch.setenv("EXLIBRIS_REEXEC", "1")
+    called = False
+
+    def fake_execv(*_args):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(module.os, "execv", fake_execv)
+    module._ensure_project_python()
+    assert not called
+
+
 def test_normalize_validate_epubs_only_enables_validate_epubs() -> None:
     module = _load_cleanup_module()
     args = module.parse_args(["run", "--validate-epubs-only"])

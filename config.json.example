@@ -1,0 +1,7 @@
+{
+  "scan_paths": [
+    "/media/books"
+  ],
+  "database_path": "data/library.db",
+  "covers_dir": "data/covers"
+}

@@ -1,7 +1,0 @@
-# Directories to scan recursively for EPUB files
-scan_paths:
-  - /media/books
-
-# Runtime data (database, cover images, SQLite WAL files)
-database_path: data/library.db
-covers_dir: data/covers

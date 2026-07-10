@@ -28,9 +28,35 @@ from exlibris.cleanup import (
     strip_book_descriptions,
 )
 from exlibris.book_paths import prune_empty_directories
+from exlibris.config import (
+    load_settings,
+    resolve_covers_dir,
+    resolve_database_path,
+    resolve_scan_path,
+)
 from exlibris.sqlite_retry import configure_sqlite_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+_VENV_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+
+
+def _ensure_project_python() -> None:
+    """Re-exec with the project venv when indexing needs SQLAlchemy."""
+    if os.environ.get("EXLIBRIS_REEXEC") == "1":
+        return
+    try:
+        import sqlalchemy  # noqa: F401
+    except ModuleNotFoundError:
+        if _VENV_PYTHON.is_file():
+            os.environ["EXLIBRIS_REEXEC"] = "1"
+            os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), *sys.argv])
+        print(
+            "error: indexing requires the project virtualenv.\n"
+            "  python3 -m venv .venv && .venv/bin/pip install -e .\n"
+            "  or: source .venv/bin/activate && python cleanup_library.py run --execute",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
 
 
 def _resolve_project_path(path: Path) -> Path:
@@ -40,45 +66,23 @@ def _resolve_project_path(path: Path) -> Path:
     return path.resolve()
 
 
-def _load_yaml_config(config: Path | None) -> dict:
-    path = config.expanduser() if config else PROJECT_ROOT / "config.yaml"
-    if not path.is_file():
-        return {}
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data if isinstance(data, dict) else {}
-
-
 def _database_path(args: argparse.Namespace) -> Path:
     if args.database is not None:
         return _resolve_project_path(args.database)
-    env = os.environ.get("EXLIBRIS_DATABASE_PATH")
-    if env:
-        return Path(env).expanduser().resolve()
-    data = _load_yaml_config(args.config)
-    if data.get("database_path"):
-        return _resolve_project_path(Path(data["database_path"]))
-    return _resolve_project_path(Path("data/library.db"))
+    settings = load_settings(args.config)
+    return resolve_database_path(settings.database_path)
 
 
 def _covers_dir(args: argparse.Namespace) -> Path:
-    data = _load_yaml_config(args.config)
-    if data.get("covers_dir"):
-        return _resolve_project_path(Path(data["covers_dir"]))
-    return _resolve_project_path(Path("data/covers"))
+    settings = load_settings(args.config)
+    return resolve_covers_dir(settings.covers_dir)
 
 
 def _scan_roots(args: argparse.Namespace) -> list[Path]:
     if args.path:
         return [_resolve_project_path(path) for path in args.path]
-    data = _load_yaml_config(args.config)
-    raw_paths = data.get("scan_paths")
-    if isinstance(raw_paths, list) and raw_paths:
-        return [_resolve_project_path(Path(str(path))) for path in raw_paths]
-    return [Path("/media/books").resolve()]
+    settings = load_settings(args.config)
+    return [resolve_scan_path(path) for path in settings.scan_paths]
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -95,14 +99,14 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "-d",
         type=Path,
         default=None,
-        help="SQLite database path (default: data/library.db or config.yaml)",
+        help="SQLite database path (default: data/library.db or config.json)",
     )
     parser.add_argument(
         "--config",
         "-c",
         type=Path,
         default=None,
-        help="Path to config.yaml",
+        help="Path to config.json",
     )
     parser.add_argument(
         "--path",
@@ -436,6 +440,8 @@ def _index_new_files(
 ) -> None:
     if not new_files:
         return
+
+    _ensure_project_python()
 
     from exlibris.config import resolve_covers_dir
     from exlibris.database import get_engine, init_db

@@ -16,7 +16,9 @@ run_exlibris() {
 }
 
 run_cleanup() {
-  if [[ -x "$ROOT/cleanup_library.py" ]]; then
+  if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    "$ROOT/.venv/bin/python" "$ROOT/cleanup_library.py" "$@"
+  elif [[ -x "$ROOT/cleanup_library.py" ]]; then
     "$ROOT/cleanup_library.py" "$@"
   elif command -v python3 >/dev/null 2>&1; then
     python3 "$ROOT/cleanup_library.py" "$@"

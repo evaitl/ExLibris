@@ -18,6 +18,11 @@ from exlibris.auth import (
     parse_session_token,
     session_secret,
 )
+from exlibris.config import (
+    load_settings,
+    resolve_database_path,
+    resolve_scan_path,
+)
 from exlibris.sqlite_retry import configure_sqlite_connection
 from exlibris.author_tokens import author_tokens_available, sync_author_tokens
 from exlibris.cgi.search import (
@@ -72,54 +77,14 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _default_database_path() -> Path:
-    return project_root() / "data" / "library.db"
-
-
-def _resolve_project_path(path: Path) -> Path:
-    path = path.expanduser()
-    if not path.is_absolute():
-        path = project_root() / path
-    return path.resolve()
-
-
-def _load_yaml_config() -> dict:
-    config = project_root() / "config.yaml"
-    if not config.exists():
-        return {}
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-    return data if isinstance(data, dict) else {}
-
-
 def database_path() -> Path:
-    env = os.environ.get("EXLIBRIS_DATABASE_PATH")
-    if env:
-        return Path(env).expanduser().resolve()
-    data = _load_yaml_config()
-    if data.get("database_path"):
-        return _resolve_project_path(Path(data["database_path"]))
-    db = _default_database_path()
-    db.parent.mkdir(parents=True, exist_ok=True)
-    return db
+    settings = load_settings()
+    return resolve_database_path(settings.database_path)
 
 
 def library_books_dirs() -> list[Path]:
-    env = os.environ.get("EXLIBRIS_SCAN_PATHS")
-    if env:
-        return [
-            Path(part.strip()).expanduser().resolve()
-            for part in env.split(os.pathsep)
-            if part.strip()
-        ]
-    data = _load_yaml_config()
-    raw_paths = data.get("scan_paths")
-    if isinstance(raw_paths, list) and raw_paths:
-        return [_resolve_project_path(Path(str(path))) for path in raw_paths]
-    return [Path("/media/books").resolve()]
+    settings = load_settings()
+    return [resolve_scan_path(path) for path in settings.scan_paths]
 
 
 def static_href() -> str:

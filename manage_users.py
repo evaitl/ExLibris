@@ -9,6 +9,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from exlibris.config import load_settings, resolve_database_path
 from exlibris.users import UserError, delete_user, list_users
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,28 +22,10 @@ def _resolve_project_path(path: Path) -> Path:
     return path.resolve()
 
 
-def _load_yaml_config(config: Path | None) -> dict:
-    path = config.expanduser() if config else PROJECT_ROOT / "config.yaml"
-    if not path.is_file():
-        return {}
-    try:
-        import yaml
-    except ImportError:
-        return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data if isinstance(data, dict) else {}
-
-
 def _database_path(args: argparse.Namespace) -> Path:
     if args.database is not None:
         return _resolve_project_path(args.database)
-    env = os.environ.get("EXLIBRIS_DATABASE_PATH")
-    if env:
-        return Path(env).expanduser().resolve()
-    data = _load_yaml_config(args.config)
-    if data.get("database_path"):
-        return _resolve_project_path(Path(data["database_path"]))
-    return _resolve_project_path(Path("data/library.db"))
+    return resolve_database_path(load_settings(args.config).database_path)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -59,14 +42,14 @@ def _add_db_args(parser: argparse.ArgumentParser) -> None:
         "-d",
         type=Path,
         default=None,
-        help="SQLite database path (default: data/library.db or config.yaml)",
+        help="SQLite database path (default: data/library.db or config.json)",
     )
     parser.add_argument(
         "--config",
         "-c",
         type=Path,
         default=None,
-        help="Path to config.yaml",
+        help="Path to config.json",
     )
 
 

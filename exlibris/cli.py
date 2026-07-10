@@ -55,7 +55,7 @@ def _run_cleanup(command: str, **flags: object) -> None:
 @app.command()
 def scan(
     config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to config.yaml"
+        None, "--config", "-c", help="Path to config.json"
     ),
     path: list[Path] = typer.Option(
         None, "--path", "-p", help="Directory or file to scan (overrides config)"
@@ -70,7 +70,7 @@ def scan(
     settings = load_settings(config)
     scan_targets = [p.expanduser() for p in path] if path else settings.scan_paths
     if not scan_targets:
-        typer.echo("No scan paths configured. Set scan_paths in config.yaml or pass --path.")
+        typer.echo("No scan paths configured. Set scan_paths in config.json or pass --path.")
         raise typer.Exit(code=1)
 
     engine = get_engine(resolve_database_path(settings.database_path))
@@ -184,7 +184,7 @@ def user_create(
         help="Account password",
     ),
     config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to config.yaml"
+        None, "--config", "-c", help="Path to config.json"
     ),
 ) -> None:
     """Create a web login account."""
