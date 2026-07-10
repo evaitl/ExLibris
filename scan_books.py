@@ -108,6 +108,17 @@ def _format_summary(stats) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    from exlibris.job_lock import LibraryJobLockedError, library_job_lock
+
+    try:
+        with library_job_lock(job_name="library scan"):
+            return _run_scan(args)
+    except LibraryJobLockedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+def _run_scan(args) -> int:
     settings = load_settings(args.config.expanduser() if args.config else None)
 
     scan_targets = [p.expanduser() for p in args.paths] if args.paths else settings.scan_paths

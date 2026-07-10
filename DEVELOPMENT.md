@@ -31,7 +31,7 @@ scan_books.py       ← standalone scan entry point
 cleanup_library.py  ← audit/reconcile files vs database
 manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/
-  schema/           ← SQL migrations (001–009)
+  schema/           ← SQL migrations (001–011)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
   auth.py           ← scrypt passwords, signed session cookies
@@ -167,15 +167,10 @@ Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 
 - Default page shows first page of all books (sorted by dropdown)
 - **Page size:** 10, 25, 50, 100 (default), 200 — configurable in UI
-- **Jump to page** control in pagination bar
-- Filtered `COUNT(*)` used for pagination totals
-- `LIMIT`/`OFFSET` in SQL queries
-
-**Not yet done (recommended for scale):**
-
-- Keyset pagination for very deep offsets
-
-### Random sort
+- **Jump to page** control in pagination bar (uses `OFFSET` for direct page jumps)
+- Filtered `COUNT(*)` used for pagination totals when exact
+- **Keyset pagination** for Previous/Next links: `after_id` / `before_id` query params on `list_books()` avoid deep `OFFSET` scans on large libraries
+- `OFFSET` retained only for the jump-to-page form and page 1
 
 **Random** sort option samples up to `page_size` books via `ORDER BY RANDOM()`. Each page request returns a new random batch; pagination counter is informational only.
 
@@ -232,8 +227,13 @@ Detection in `exlibris/fetch_metadata.py`:
 | 4 | `004_content_hash.sql` | unique index on `content_hash` for dedup |
 | 5 | `005_users.sql` | `users`, `user_favorites` |
 | 6 | `006_fts_extend.sql` | extend `books_fts` with `sort_title`, `tags`; rebuild index |
+| 7 | `007_library_stats.sql` | cached library totals and language list |
+| 8 | `008_author_tokens.sql` | author token table for faster author search |
+| 9 | `009_epub_validation.sql` | `epub_validated`, `epub_deep_validated` flags |
+| 10 | `010_epub_version2.sql` | `epub_version2` flag for Calibre re-encode pass |
+| 11 | `011_epub_maintenance_indexes.sql` | partial indexes for EPUB update/validation queues |
 
-Key `books` columns: `file_path`, `content_hash`, `title`, `authors`, `publisher`, `published_date`, `language`, `description`, `tags`, `cover_path`, `first_seen_at`, `last_scanned_at`, `is_missing`.
+Key `books` columns: `file_path`, `content_hash`, `title`, `authors`, `publisher`, `published_date`, `language`, `description`, `tags`, `cover_path`, `first_seen_at`, `last_scanned_at`, `is_missing`, `epub_validated`, `epub_deep_validated`, `epub_version2`.
 
 ---
 
@@ -269,20 +269,38 @@ exlibris cleanup audit --validate-epubs-only     # report invalid EPUBs only (re
 exlibris cleanup run --execute --validate-epubs-only  # remove bad EPUBs; skip other cleanup
 exlibris cleanup run --execute --force-clean  # hard-delete rows whose file is gone
 python scan_books.py -v                    # standalone scanner, verbose
+./update_epubs.py --execute                # re-encode EPUBs to version 2 in place
 ./manage_users.py list                     # list accounts (stdlib; no venv)
 ./scripts/setup-data-dir.sh                # create data/; chmod entry-point scripts
 ./scripts/shard-covers.py                  # dry-run: shard flat covers into NN/ subdirs
 ./scripts/shard-covers.py --execute        # move covers; update books.cover_path
-./scripts/scan-library.sh                  # manual or cron: scan + cleanup
+./scripts/scan-library.sh                  # manual or cron: scan + cleanup (flock on library.lock)
 ```
 
-Cron example (4 AM daily) — runs scan then cleanup with backfill and prune:
+Cron example (4 AM daily) — runs scan then cleanup with backfill and prune. The script holds `data/library.lock` for the whole run; overlapping cron invocations skip cleanly:
 
 ```cron
 0 4 * * * /path/to/ExLibris/scripts/scan-library.sh
 ```
 
 Log: `data/scan.log`
+
+### Job lock (`exlibris/job_lock.py`)
+
+Long-running maintenance jobs share an exclusive `flock` on `data/library.lock` (PID written to the file):
+
+| Entry point | Lock name |
+|-------------|-----------|
+| `scan_books.py`, `exlibris scan` | library scan |
+| `cleanup_library.py run`, `exlibris cleanup run` | library cleanup |
+| `update_epubs.py` | EPUB update |
+| `scripts/scan-library.sh` | shell `flock` on the same file |
+
+When the shell script holds the lock, it sets `EXLIBRIS_JOB_LOCK_HELD=1` so child Python processes do not double-lock. A second manual or cron job exits with a clear message instead of corrupting the database mid-write.
+
+### EPUB 2 conversion (`update_epubs.py` / `exlibris/epub_update.py`)
+
+Re-encodes indexed EPUBs under scan roots with `ebook-convert --epub-version=2`. Sets `epub_version2=1` on success; SQL partial index `idx_books_epub_needs_v2` speeds candidate selection at scale. After conversion, `validate_epub_structure()` runs automatically — valid files get `epub_validated=1`; failures delete the file and `purge_book()` (same as a bad conversion). Dry-run by default; `--execute` applies changes.
 
 ### Library cleanup (`cleanup_library.py` / `exlibris cleanup`)
 
@@ -320,7 +338,7 @@ Structural validation only — not malware scanning. Checks:
 
 `--validate-epubs-deep` adds Calibre `ebook-meta` (must open the file). Does **not** scan JS, zip bombs, or non-spine assets.
 
-`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. Indexed books with `epub_validated` / `epub_deep_validated` set are skipped on later runs (migration 009). Flags are cleared when the file path, size, mtime, or content hash changes. `audit_epub_integrity()` reports progress every 1000 valid EPUBs, marks validation flags immediately after each good indexed book, and removes invalid EPUBs as they are found when a removal context is supplied.
+`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. SQL filters on `epub_validated` / `epub_deep_validated` (partial indexes in migration 011) skip already-checked books; validated paths are tracked so disk walks do not re-queue them. Flags are cleared when the file path, size, mtime, or content hash changes. `audit_epub_integrity()` reports progress every 1000 valid EPUBs, marks validation flags immediately after each good indexed book, and removes invalid EPUBs as they are found when a removal context is supplied.
 
 Recommended manual schedule on large libraries: `audit --validate-epubs-only` → dry-run `run --validate-epubs-only` → `run --execute --validate-epubs-only`. Not part of default cron (too slow for nightly runs on ~500K books).
 
@@ -330,6 +348,7 @@ Recommended manual schedule on large libraries: `audit --validate-epubs-only` �
 - **Login/register redirects:** `safe_post_login_redirect()` allows only `index.py` or `book.py?id=<digits>` with optional browse query params; rejects CRLF and absolute URLs
 - **Fetch metadata:** `merge_fetched_metadata()` fills empty fields by default; overwriting existing values requires the **Overwrite existing metadata** checkbox; null online values never clear stored fields
 - **Book detail prev/next:** `neighbor_book_ids()` uses keyset queries on sort key + `books.id` instead of a full-library window sort
+- **Library browse prev/next:** `list_books()` keyset via `after_id` / `before_id`; jump-to-page form still uses `OFFSET`
 
 Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 
@@ -393,14 +412,15 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - **Books:** default scan `/media/books`; runtime data in `data/`
 - **Covers:** sharded `data/covers/NN/{id}.jpg`; static Apache alias; `scripts/shard-covers.py` migrates flat layouts
 - **Dedup:** SHA-1 `content_hash`; scanner/cleanup keep longest basename and delete shorter copies; missing files hidden from browse
-- **Library browse:** FTS search, pagination, favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
+- **Library browse:** FTS search, keyset pagination (prev/next), favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
 - **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)
 - **Accounts:** optional login for favorites; `manage_users.py` for server-side list/delete; open web registration
 - **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover
-- **Cleanup:** `cleanup_library.py` / `exlibris cleanup`; cron runs after scan
+- **Cleanup:** `cleanup_library.py` / `exlibris cleanup`; cron runs after scan; exclusive `data/library.lock`
+- **EPUB maintenance:** validation flags (009), EPUB 2 conversion (`update_epubs.py`, 010), partial indexes (011)
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
-- **Scale target:** ~600K books — FTS + pagination in place; keyset pagination still open
+- **Scale target:** ~600K books — FTS, keyset pagination, and partial indexes for EPUB queues in place
 
 ---
 
@@ -409,7 +429,6 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - Genre/language links from book detail back to filtered library
 - Scan status in header (`data/scan.log` or DB)
 - Faceted filter counts (e.g. language with book counts)
-- Keyset pagination for deep pages
 - Optional disable open registration
 - Narrow title search (drop `file_name` from title filter)
 - Extend admin edit to publisher and series

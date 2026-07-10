@@ -27,6 +27,12 @@ def main() -> None:
     raw_page_size = form.getfirst("page_size", "") or ""
     raw_page = form.getfirst("page", "1") or "1"
     page = int(raw_page) if str(raw_page).isdigit() else 1
+    raw_after = form.getfirst("after_id", "") or ""
+    raw_before = form.getfirst("before_id", "") or ""
+    after_id = int(raw_after) if str(raw_after).isdigit() else None
+    before_id = int(raw_before) if str(raw_before).isdigit() else None
+    if after_id is not None and before_id is not None:
+        before_id = None
     notice = form.getfirst("notice", "") or ""
 
     try:
@@ -46,6 +52,8 @@ def main() -> None:
                 sort_dir=sort_dir,
                 page=page,
                 page_size=raw_page_size,
+                after_id=after_id,
+                before_id=before_id,
                 favorites_only=favorites_only,
                 user_id=current_user.id if current_user else None,
             )

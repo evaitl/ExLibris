@@ -145,6 +145,8 @@ def _filter_query(
     sort_dir: str,
     page_size: int,
     page: int | None = None,
+    after_id: int | None = None,
+    before_id: int | None = None,
     favorites_only: bool = False,
 ) -> str:
     params: dict[str, str] = {}
@@ -166,6 +168,10 @@ def _filter_query(
         params["sort_dir"] = sort_dir
     if page_size != DEFAULT_PAGE_SIZE:
         params["page_size"] = str(page_size)
+    if after_id is not None:
+        params["after_id"] = str(after_id)
+    elif before_id is not None:
+        params["before_id"] = str(before_id)
     if page is not None and page > 1:
         params["page"] = str(page)
     query = urlencode(params)
@@ -260,6 +266,8 @@ def _pagination_nav(
     sort: str,
     sort_dir: str,
     favorites_only: bool = False,
+    first_book_id: int | None = None,
+    last_book_id: int | None = None,
 ) -> str:
     base = cgi_script("index.py")
     common = dict(
@@ -324,11 +332,29 @@ def _pagination_nav(
         return ""
 
     if not filtered_count_exact:
-        prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
+        prev_url = (
+            base
+            + _filter_query(
+                **common,
+                before_id=first_book_id,
+                page=page - 1,
+            )
+            if page > 1 and first_book_id is not None
+            else (base + _filter_query(**common, page=page - 1) if page > 1 else "")
+        )
         next_url = (
-            base + _filter_query(**common, page=page + 1)
-            if books_on_page >= page_size
-            else ""
+            base
+            + _filter_query(
+                **common,
+                after_id=last_book_id,
+                page=page + 1,
+            )
+            if books_on_page >= page_size and last_book_id is not None
+            else (
+                base + _filter_query(**common, page=page + 1)
+                if books_on_page >= page_size
+                else ""
+            )
         )
         attrs = [
             'class="pagination"',
@@ -355,9 +381,29 @@ def _pagination_nav(
 """
 
     max_page = (filtered_count + page_size - 1) // page_size
-    prev_url = base + _filter_query(**common, page=page - 1) if page > 1 else ""
+    prev_url = (
+        base
+        + _filter_query(
+            **common,
+            before_id=first_book_id,
+            page=page - 1,
+        )
+        if page > 1 and first_book_id is not None
+        else (base + _filter_query(**common, page=page - 1) if page > 1 else "")
+    )
     next_url = (
-        base + _filter_query(**common, page=page + 1) if page < max_page else ""
+        base
+        + _filter_query(
+            **common,
+            after_id=last_book_id,
+            page=page + 1,
+        )
+        if page < max_page and last_book_id is not None
+        else (
+            base + _filter_query(**common, page=page + 1)
+            if page < max_page
+            else ""
+        )
     )
 
     attrs = [
@@ -458,6 +504,8 @@ def render_library(
             sort=sort,
             sort_dir=sort_dir,
             favorites_only=favorites_only,
+            first_book_id=books[0].id,
+            last_book_id=books[-1].id,
         )
         collection = f"""{pagination}    <ul class="book-grid">
 {cards}

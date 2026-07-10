@@ -515,6 +515,17 @@ def _index_new_files(
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from exlibris.job_lock import LibraryJobLockedError, library_job_lock
+
+    try:
+        with library_job_lock(job_name="library cleanup"):
+            return _cmd_run_locked(args)
+    except LibraryJobLockedError as exc:
+        _log(str(exc), file=sys.stderr)
+        return 1
+
+
+def _cmd_run_locked(args: argparse.Namespace) -> int:
     if (code := _normalize_validate_epub_args(args)) is not None:
         return code
 

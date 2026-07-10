@@ -67,25 +67,32 @@ def scan(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-file progress"),
 ) -> None:
     """Scan directories for ebooks and update the library database."""
+    from exlibris.job_lock import LibraryJobLockedError, library_job_lock
+
     settings = load_settings(config)
     scan_targets = [p.expanduser() for p in path] if path else settings.scan_paths
     if not scan_targets:
         typer.echo("No scan paths configured. Set scan_paths in config.json or pass --path.")
         raise typer.Exit(code=1)
 
-    engine = get_engine(resolve_database_path(settings.database_path))
-    SessionLocal = init_db(engine)
+    try:
+        with library_job_lock(job_name="library scan"):
+            engine = get_engine(resolve_database_path(settings.database_path))
+            SessionLocal = init_db(engine)
 
-    with SessionLocal() as session:
-        stats = scan_paths(
-            session,
-            scan_targets,
-            ebook_meta_cmd=ebook_meta,
-            covers_dir=resolve_covers_dir(settings.covers_dir),
-            verbose=verbose,
-            on_progress=None if quiet else print_scan_progress,
-            validate_epub=True,
-        )
+            with SessionLocal() as session:
+                stats = scan_paths(
+                    session,
+                    scan_targets,
+                    ebook_meta_cmd=ebook_meta,
+                    covers_dir=resolve_covers_dir(settings.covers_dir),
+                    verbose=verbose,
+                    on_progress=None if quiet else print_scan_progress,
+                    validate_epub=True,
+                )
+    except LibraryJobLockedError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
 
     summary = (
         f"Scanned {stats.scanned} files, updated {stats.added_or_updated} records"

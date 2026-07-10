@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 11
 
 
 def get_engine(db_path: Path) -> Engine:
@@ -126,6 +126,7 @@ def upsert_book(session: Session, data: dict) -> Book:
         if file_changed:
             existing.epub_validated = False
             existing.epub_deep_validated = False
+            existing.epub_version2 = False
         session.add(existing)
         return existing
 

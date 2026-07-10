@@ -75,3 +75,4 @@ class Book(Base):
     epub_deep_validated: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    epub_version2: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

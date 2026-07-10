@@ -52,12 +52,14 @@ cp admins.txt.example admins.txt   # then add admin usernames
 ExLibris/
   data/            ← runtime data (gitignored)
     library.db
+    library.lock     ← pidfile for exclusive maintenance jobs
     covers/
     scan.log
   admins.txt       ← local admin usernames (gitignored; copy from admins.txt.example)
   cleanup_library.py   ← reconcile files vs database
   manage_users.py      ← list/delete web accounts
   scan_books.py        ← standalone scan entry point
+  update_epubs.py      ← re-encode EPUBs to version 2
   web/cgi-bin/     ← web UI
   exlibris/        ← Python package
 
@@ -154,6 +156,8 @@ Add one line (replace `/path/to/ExLibris` with your clone location):
 
 Cron uses your login user. That user needs read access to `/media/books` and write access to `data/` (same as a manual scan). Incremental scans skip unchanged files when size and mtime match, so a nightly run is usually quick unless many new books were added. Cleanup after each scan deduplicates on-disk copies, sanitizes filenames, indexes new EPUBs, backfills missing SHA-1 hashes, and prunes empty directories. EPUB validation/removal (`--validate-epubs`) is not in the default cron job — run it manually when you want to purge corrupt files.
 
+`scan-library.sh` acquires an exclusive lock on `data/library.lock` before starting. If another scan, cleanup, or EPUB update is already running, the cron job logs a skip message and exits. Manual runs of `scan_books.py`, `cleanup_library.py run`, and `update_epubs.py` use the same lock file and refuse to start when a job is already in progress.
+
 Check recent scan output:
 
 ```bash
@@ -168,7 +172,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 - **Full-text search** (FTS5) by title, author, publisher, and genre — fast on large libraries; no rescan needed
 - **Search** filters — each word in a field must match (prefix/token search via FTS; falls back to substring `LIKE` if needed)
-- **Pagination** with configurable page size (10, 25, 50, 100, or 200)
+- **Pagination** with configurable page size (10, 25, 50, 100, or 200); **Previous/Next** use keyset cursors (`after_id` / `before_id`) for fast browsing at any depth; **Jump to page** still uses offset when you need a specific page number
 - **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
 - **Debounced search** — filters apply automatically ~2s after you stop typing
@@ -414,6 +418,18 @@ Environment variables override config values, for example `EXLIBRIS_DATABASE_PAT
 3. **Web UI** (`web/cgi-bin/`) reads the database and displays the collection.
 
 Scanning, cleanup, and serving are separate processes. Cron runs scan then cleanup nightly; the web server does not need a restart.
+
+### EPUB 2 conversion
+
+If some EPUBs fail in readers, re-encode them with Calibre:
+
+```bash
+./update_epubs.py                         # dry-run: count candidates
+./update_epubs.py --execute               # convert in place, update DB
+./update_epubs.py --execute -p ~/books  # limit to one scan root
+```
+
+Uses `ebook-convert … --epub-version=2`, replaces each file under its original path, updates `content_hash` / size / mtime, and sets `epub_version2` so interrupted runs skip finished books. After each conversion, structural EPUB validation runs automatically; valid files are marked `epub_validated`. Failed conversions or post-conversion validation failures delete the file and purge the database row (and cover). Requires Calibre on `PATH` and the project venv. Uses the same `data/library.lock` as scan and cleanup — do not run concurrently with those jobs.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation history and server deployment notes.
 

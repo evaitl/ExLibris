@@ -4,8 +4,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG="$ROOT/data/scan.log"
+LOCK="$ROOT/data/library.lock"
 
 mkdir -p "$ROOT/data"
+
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "=== $(date -Is) skipped: another library job is running ===" >>"$LOG"
+  exit 0
+fi
+echo $$ >&9
+export EXLIBRIS_JOB_LOCK_HELD=1
 
 run_exlibris() {
   if command -v exlibris >/dev/null 2>&1; then

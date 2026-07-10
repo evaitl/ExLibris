@@ -661,6 +661,41 @@ def _neighbor_id_query(
     return sql, query_params
 
 
+def _select_books_page_keyset_query(
+    fts_match: str | None,
+    where: list[str],
+    params: list[object],
+    parts: list[tuple[str, str]],
+    anchor_values: list[object],
+    *,
+    after: bool,
+    limit: int,
+) -> tuple[str, list[object]]:
+    compare_sql, compare_params = _list_order_compare_sql(
+        parts,
+        anchor_values,
+        after=after,
+    )
+    order_sql = _order_sql(parts, reverse=not after)
+    where_sql = " AND ".join(where)
+
+    if fts_match:
+        sql = (
+            f"SELECT {_LIST_BOOK_SELECT} FROM books "
+            "INNER JOIN books_fts ON books_fts.rowid = books.id "
+            f"WHERE books_fts MATCH ? AND {where_sql} AND {compare_sql} "
+            f"ORDER BY {order_sql} LIMIT ?"
+        )
+        query_params: list[object] = [fts_match, *params, *compare_params, limit]
+    else:
+        sql = (
+            f"SELECT {_LIST_BOOK_SELECT} FROM books WHERE {where_sql} AND {compare_sql} "
+            f"ORDER BY {order_sql} LIMIT ?"
+        )
+        query_params = [*params, *compare_params, limit]
+    return sql, query_params
+
+
 def _book_in_filtered_view(
     conn: sqlite3.Connection,
     book_id: int,
@@ -973,6 +1008,8 @@ def list_books(
     sort_dir: str = "asc",
     page: int = 1,
     page_size: int | str = DEFAULT_PAGE_SIZE,
+    after_id: int | None = None,
+    before_id: int | None = None,
     favorites_only: bool = False,
     user_id: int | None = None,
 ) -> tuple[list[BookRow], int, int, int, FilterOptions, bool]:
@@ -1043,22 +1080,67 @@ def list_books(
             count_exact,
         )
 
+    parts = _sort_key_parts(sort, sort_dir)
+    rows: list[sqlite3.Row] = []
     offset = (page - 1) * page_size
-    select_sql, select_params = _select_books_sql(
-        fts_match,
-        where,
-        params,
-        order_by,
-        limit=page_size,
-        offset=offset,
-    )
-    rows = conn.execute(select_sql, select_params).fetchall()
+
+    if after_id is not None:
+        anchor_values = _fetch_sort_key_values(conn, after_id, parts)
+        if anchor_values is not None and _book_in_filtered_view(
+            conn, after_id, fts_match, where, params
+        ):
+            select_sql, select_params = _select_books_page_keyset_query(
+                fts_match,
+                where,
+                params,
+                parts,
+                anchor_values,
+                after=True,
+                limit=page_size,
+            )
+            rows = conn.execute(select_sql, select_params).fetchall()
+        else:
+            after_id = None
+
+    if before_id is not None and after_id is None:
+        anchor_values = _fetch_sort_key_values(conn, before_id, parts)
+        if anchor_values is not None and _book_in_filtered_view(
+            conn, before_id, fts_match, where, params
+        ):
+            select_sql, select_params = _select_books_page_keyset_query(
+                fts_match,
+                where,
+                params,
+                parts,
+                anchor_values,
+                after=False,
+                limit=page_size,
+            )
+            rows = list(reversed(conn.execute(select_sql, select_params).fetchall()))
+        else:
+            before_id = None
+
+    if after_id is None and before_id is None:
+        select_sql, select_params = _select_books_sql(
+            fts_match,
+            where,
+            params,
+            order_by,
+            limit=page_size,
+            offset=offset if page > 1 else None,
+        )
+        rows = conn.execute(select_sql, select_params).fetchall()
 
     if not filtered:
         filtered_count = library_total
     else:
         if len(rows) < page_size:
-            filtered_count = offset + len(rows)
+            if after_id is not None:
+                filtered_count = offset + len(rows)
+            elif before_id is not None:
+                filtered_count = max(len(rows), offset + len(rows))
+            else:
+                filtered_count = offset + len(rows)
             count_exact = True
         else:
             filtered_count = offset + len(rows)

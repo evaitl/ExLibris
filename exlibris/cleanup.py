@@ -268,7 +268,8 @@ def update_book_path(
                 """
                 UPDATE books
                 SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
-                    is_missing = 0, epub_validated = 0, epub_deep_validated = 0
+                    is_missing = 0, epub_validated = 0, epub_deep_validated = 0,
+                    epub_version2 = 0
                 WHERE id = ?
                 """,
                 params,
@@ -276,15 +277,28 @@ def update_book_path(
         except sqlite3.OperationalError as exc:
             if is_sqlite_locked(exc):
                 raise
-            conn.execute(
-                """
-                UPDATE books
-                SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
-                    is_missing = 0
-                WHERE id = ?
-                """,
-                params,
-            )
+            try:
+                conn.execute(
+                    """
+                    UPDATE books
+                    SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                        is_missing = 0, epub_validated = 0, epub_deep_validated = 0
+                    WHERE id = ?
+                    """,
+                    params,
+                )
+            except sqlite3.OperationalError as exc2:
+                if is_sqlite_locked(exc2):
+                    raise
+                conn.execute(
+                    """
+                    UPDATE books
+                    SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+                        is_missing = 0
+                    WHERE id = ?
+                    """,
+                    params,
+                )
 
     run_write_with_retry(conn, writer)
 
@@ -492,6 +506,12 @@ def sanitize_book_filenames(
     return updated, errors
 
 
+def _books_have_epub_validation_columns(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute("PRAGMA table_info(books)").fetchall()
+    names = {str(row[1]) for row in rows}
+    return "epub_validated" in names and "epub_deep_validated" in names
+
+
 def mark_epub_validated_batch(
     conn: sqlite3.Connection,
     book_ids: list[int],
@@ -697,26 +717,47 @@ def collect_epub_paths_for_validation(
     paths: list[Path] = []
     seen: set[str] = set()
     skipped = 0
-    try:
-        rows = conn.execute(
-            """
-            SELECT id, file_path, epub_validated, epub_deep_validated
+    has_validation_columns = _books_have_epub_validation_columns(conn)
+    validation_filter = ""
+    if has_validation_columns:
+        validation_filter = (
+            " AND epub_deep_validated = 0" if deep else " AND epub_validated = 0"
+        )
+        skipped = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM books
+                WHERE is_missing = 0
+                  AND {"epub_deep_validated = 1" if deep else "epub_validated = 1"}
+                """
+            ).fetchone()[0]
+        )
+        skip_rows = conn.execute(
+            f"""
+            SELECT file_path
             FROM books
             WHERE is_missing = 0
+              AND {"epub_deep_validated = 1" if deep else "epub_validated = 1"}
             ORDER BY id
             """
         ).fetchall()
-        has_validation_columns = True
-    except sqlite3.OperationalError:
-        has_validation_columns = False
-        rows = conn.execute(
-            """
-            SELECT id, file_path
-            FROM books
-            WHERE is_missing = 0
-            ORDER BY id
-            """
-        ).fetchall()
+        for row in skip_rows:
+            path = Path(str(row["file_path"]))
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            if path_is_under_any_root(resolved, scan_roots):
+                seen.add(str(resolved))
+    rows = conn.execute(
+        f"""
+        SELECT id, file_path
+        FROM books
+        WHERE is_missing = 0
+        {validation_filter}
+        ORDER BY id
+        """
+    ).fetchall()
 
     for row in rows:
         path = Path(str(row["file_path"]))
@@ -726,15 +767,6 @@ def collect_epub_paths_for_validation(
         if not path_is_under_any_root(resolved, scan_roots):
             continue
         key = str(resolved)
-        if has_validation_columns:
-            if deep and int(row["epub_deep_validated"]):
-                skipped += 1
-                seen.add(key)
-                continue
-            if not deep and int(row["epub_validated"]):
-                skipped += 1
-                seen.add(key)
-                continue
         if key not in seen:
             seen.add(key)
             paths.append(resolved)
@@ -789,7 +821,7 @@ def backfill_content_hashes(
                 try:
                     conn.execute(
                         "UPDATE books SET content_hash = ?, epub_validated = 0, "
-                        "epub_deep_validated = 0 WHERE id = ?",
+                        "epub_deep_validated = 0, epub_version2 = 0 WHERE id = ?",
                         (content_hash, book.id),
                     )
                 except sqlite3.OperationalError as exc:
