@@ -295,7 +295,7 @@ Dry-run by default; `--execute` applies changes. `--force-clean` requires `--exe
 | Validate only | `--validate-epubs-only`: skip dedupe, sanitize, index; only validate (and remove with `--execute`) |
 | Remove invalid | With `run --execute --validate-epubs`: delete bad files under scan roots; `purge_book` + cover removal for indexed rows |
 | Dedupe | SHA-1 match → keep longest basename; delete shorter copies; repoint DB (no Calibre) |
-| Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover) |
+| Index | Unindexed files with no hash match → `scan_single_file()` (Calibre + cover); scan and cleanup indexing validate EPUB structure first and delete invalid files under scan roots |
 | Backfill | `--backfill-hashes`: SHA-1 for rows with `content_hash IS NULL` |
 | Prune | `--prune-empty-dirs`: remove empty directories under scan roots |
 | Purge | `--force-clean`: DELETE rows whose `file_path` is not a regular file |
@@ -313,7 +313,7 @@ Structural validation only — not malware scanning. Checks:
 
 `--validate-epubs-deep` adds Calibre `ebook-meta` (must open the file). Does **not** scan JS, zip bombs, or non-spine assets.
 
-`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. Indexed books with `epub_validated` / `epub_deep_validated` set are skipped on later runs (migration 009). Flags are cleared when the file path, size, mtime, or content hash changes. `audit_epub_integrity()` reports progress every 1000 valid EPUBs and records validation flags in batches.
+`collect_epub_paths_for_validation()` walks indexed on-disk paths plus unindexed `.epub` files under scan roots. Indexed books with `epub_validated` / `epub_deep_validated` set are skipped on later runs (migration 009). Flags are cleared when the file path, size, mtime, or content hash changes. `audit_epub_integrity()` reports progress every 1000 valid EPUBs, marks validation flags immediately after each good indexed book, and removes invalid EPUBs as they are found when a removal context is supplied.
 
 Recommended manual schedule on large libraries: `audit --validate-epubs-only` → dry-run `run --validate-epubs-only` → `run --execute --validate-epubs-only`. Not part of default cron (too slow for nightly runs on ~500K books).
 

@@ -93,6 +93,44 @@ def test_collect_epub_paths_deep_skip_requires_deep_flag() -> None:
         assert paths == []
 
 
+def test_audit_epub_integrity_marks_valid_books_immediately() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        first = root / "first.epub"
+        second = root / "second.epub"
+        first.write_bytes(b"epub1")
+        second.write_bytes(b"epub2")
+
+        conn = _init_db(root / "library.db")
+        first_id = _insert_book(conn, first)
+        second_id = _insert_book(conn, second)
+
+        def fake_validate(path: Path, *, deep: bool = False, ebook_meta_cmd=None):
+            del deep, ebook_meta_cmd
+            return EpubValidationResult(path=path, ok=True, errors=[])
+
+        with patch("exlibris.cleanup.validate_epub", side_effect=fake_validate):
+            audit_epub_integrity(
+                [first.resolve(), second.resolve()],
+                path_to_book_id={
+                    str(first.resolve()): first_id,
+                    str(second.resolve()): second_id,
+                },
+                conn=conn,
+            )
+
+        first_row = conn.execute(
+            "SELECT epub_validated FROM books WHERE id = ?",
+            (first_id,),
+        ).fetchone()
+        second_row = conn.execute(
+            "SELECT epub_validated FROM books WHERE id = ?",
+            (second_id,),
+        ).fetchone()
+        assert int(first_row["epub_validated"]) == 1
+        assert int(second_row["epub_validated"]) == 1
+
+
 def test_audit_epub_integrity_marks_valid_books() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

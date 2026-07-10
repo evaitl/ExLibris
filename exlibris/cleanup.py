@@ -67,6 +67,20 @@ class InvalidEpub:
         return f"{prefix}{display_path(self.path)}"
 
 
+@dataclass(frozen=True)
+class EpubRemovalContext:
+    scan_roots: list[Path]
+    covers_dir: Path
+    execute: bool
+
+
+@dataclass
+class EpubRemovalTotals:
+    files_deleted: int = 0
+    rows_purged: int = 0
+    covers_removed: int = 0
+
+
 @dataclass
 class AuditReport:
     unindexed_files: list[Path] = field(default_factory=list)
@@ -500,6 +514,16 @@ def mark_epub_validated_batch(
         return
 
 
+def mark_epub_validated(
+    conn: sqlite3.Connection,
+    book_id: int,
+    *,
+    deep: bool,
+) -> None:
+    """Record one indexed book as successfully validated."""
+    mark_epub_validated_batch(conn, [book_id], deep=deep)
+
+
 def audit_epub_integrity(
     paths: list[Path],
     *,
@@ -507,6 +531,8 @@ def audit_epub_integrity(
     deep: bool = False,
     ebook_meta_cmd: str | None = None,
     conn: sqlite3.Connection | None = None,
+    removal: EpubRemovalContext | None = None,
+    removal_totals: EpubRemovalTotals | None = None,
     on_progress: ProgressCallback | None = None,
     on_invalid: InvalidEpubCallback | None = None,
     on_valid_progress: ValidEpubProgressCallback | None = None,
@@ -517,7 +543,9 @@ def audit_epub_integrity(
     ``on_invalid`` is called as soon as each invalid EPUB is found.
     ``on_valid_progress`` is called after every ``valid_progress_interval``
     valid EPUBs (default 1000). When ``conn`` is provided, indexed books that
-    pass validation are marked so later runs can skip them.
+    pass validation are marked immediately so later runs can skip them.
+    When ``removal`` is provided, each invalid EPUB is handled as soon as it
+    is found instead of waiting until the end of the pass.
     """
     path_to_book_id = path_to_book_id or {}
     invalid: list[InvalidEpub] = []
@@ -525,7 +553,6 @@ def audit_epub_integrity(
     ordered = sorted(paths, key=lambda item: str(item).lower())
     total = len(ordered)
     valid_count = 0
-    validated_ids: list[int] = []
     for index, path in enumerate(ordered, start=1):
         if on_progress is not None:
             on_progress(index, total, path.name)
@@ -548,22 +575,32 @@ def audit_epub_integrity(
             invalid.append(item)
             if on_invalid is not None:
                 on_invalid(item)
+            if removal is not None and conn is not None:
+                files_deleted, rows_purged, covers_removed, remove_errors = (
+                    remove_invalid_epubs(
+                        conn,
+                        [item],
+                        scan_roots=removal.scan_roots,
+                        covers_dir=removal.covers_dir,
+                        execute=removal.execute,
+                    )
+                )
+                if removal_totals is not None:
+                    removal_totals.files_deleted += files_deleted
+                    removal_totals.rows_purged += rows_purged
+                    removal_totals.covers_removed += covers_removed
+                errors.extend(remove_errors)
             continue
         valid_count += 1
         book_id = path_to_book_id.get(str(path.resolve()))
         if conn is not None and book_id is not None:
-            validated_ids.append(book_id)
-            if len(validated_ids) >= valid_progress_interval:
-                mark_epub_validated_batch(conn, validated_ids, deep=deep)
-                validated_ids.clear()
+            mark_epub_validated(conn, book_id, deep=deep)
         if (
             on_valid_progress is not None
             and valid_progress_interval > 0
             and valid_count % valid_progress_interval == 0
         ):
             on_valid_progress(valid_count, total)
-    if conn is not None and validated_ids:
-        mark_epub_validated_batch(conn, validated_ids, deep=deep)
     return invalid, errors
 
 

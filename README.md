@@ -96,6 +96,8 @@ source .venv/bin/activate
 python scan_books.py
 ```
 
+`scan_books.py` and `exlibris scan` validate EPUB structure before indexing new or changed files. Invalid EPUBs are logged, deleted from disk (under scan roots), and not added to the database.
+
 Or use the installed CLI:
 
 ```bash

@@ -84,6 +84,7 @@ def scan(
             covers_dir=resolve_covers_dir(settings.covers_dir),
             verbose=verbose,
             on_progress=None if quiet else print_scan_progress,
+            validate_epub=True,
         )
 
     summary = (
@@ -95,6 +96,8 @@ def scan(
         summary += f", skipped {stats.unchanged} unchanged"
     if stats.marked_missing:
         summary += f", marked {stats.marked_missing} missing"
+    if stats.invalid_epubs:
+        summary += f", skipped {stats.invalid_epubs} invalid EPUB(s)"
     if stats.files_deleted:
         summary += f", deleted {stats.files_deleted} duplicate file(s)"
     typer.echo(f"{summary}.")

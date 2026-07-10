@@ -16,9 +16,10 @@ from exlibris.book_paths import (
     path_is_under_any_root,
 )
 from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
-from exlibris.cover_paths import cover_dest_base
+from exlibris.cover_paths import cover_dest_base, remove_cover_files
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
+from exlibris.epub_validate import validate_epub_structure
 from exlibris.file_hash import sha1_file
 from exlibris.library_cache import refresh_library_stats
 from exlibris.filenames import display_name, display_path, display_text, ensure_safe_filename
@@ -35,6 +36,7 @@ class ScanStats:
     unchanged: int = 0
     marked_missing: int = 0
     files_deleted: int = 0
+    invalid_epubs: int = 0
     errors: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -188,6 +190,54 @@ class FileScanResult:
     status: str
     book: Book | None = None
     files_deleted: int = 0
+    detail: str = ""
+
+
+def _validate_epub_for_index(file_path: Path) -> str | None:
+    """Return an error message when the EPUB fails structural validation."""
+    if file_path.suffix.lower() != ".epub":
+        return None
+    result = validate_epub_structure(file_path)
+    if result.ok:
+        return None
+    if result.errors:
+        return "; ".join(result.errors)
+    return "invalid EPUB"
+
+
+def _remove_invalid_epub_on_scan(
+    session: Session,
+    file_path: Path,
+    *,
+    scan_roots: list[Path] | None,
+    covers_dir: Path | None,
+    existing: Book | None,
+) -> tuple[int, list[str]]:
+    """Delete an invalid EPUB under scan roots and purge an indexed row if present."""
+    files_deleted = 0
+    notes: list[str] = []
+
+    if scan_roots and file_path.is_file():
+        if path_is_under_any_root(file_path, scan_roots):
+            try:
+                delete_file_under_roots(file_path, scan_roots)
+                files_deleted = 1
+            except OSError as exc:
+                notes.append(f"delete failed: {exc}")
+        else:
+            notes.append(f"refusing to delete outside scan roots: {display_path(file_path)}")
+
+    if existing is not None:
+        covers_root = resolve_covers_dir(covers_dir)
+        if covers_root.is_dir():
+            remove_cover_files(covers_root, existing.id)
+        session.delete(existing)
+        session.commit()
+        raw = session.connection().connection.dbapi_connection
+        refresh_library_stats(raw)
+        notes.append(f"purged book id={existing.id}")
+
+    return files_deleted, notes
 
 
 def scan_single_file(
@@ -199,6 +249,7 @@ def scan_single_file(
     now: datetime | None = None,
     verbose: bool = False,
     scan_roots: list[Path] | None = None,
+    validate_epub: bool = False,
 ) -> FileScanResult:
     """Index one ebook file. Returns status: indexed, unchanged, duplicate, or error."""
     if now is None:
@@ -246,6 +297,25 @@ def scan_single_file(
         if skip_reason == "unchanged":
             return FileScanResult("unchanged", existing)
 
+        if validate_epub:
+            epub_error = _validate_epub_for_index(file_path)
+            if epub_error is not None:
+                files_deleted, removal_notes = _remove_invalid_epub_on_scan(
+                    session,
+                    file_path,
+                    scan_roots=scan_roots,
+                    covers_dir=covers_dir,
+                    existing=existing,
+                )
+                detail = epub_error
+                if removal_notes:
+                    detail = f"{epub_error} ({'; '.join(removal_notes)})"
+                return FileScanResult(
+                    "invalid_epub",
+                    detail=detail,
+                    files_deleted=files_deleted,
+                )
+
         meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
         if meta.errors and verbose:
             for err in meta.errors:
@@ -272,6 +342,11 @@ def scan_single_file(
                 "series_index": meta.series_index,
                 "tags": meta.tags,
                 "last_scanned_at": now,
+                **(
+                    {"epub_validated": True, "epub_deep_validated": False}
+                    if validate_epub
+                    else {}
+                ),
             },
         )
         session.flush()
@@ -305,6 +380,7 @@ def scan_paths(
     covers_dir: Path | None = None,
     verbose: bool = False,
     on_progress: ScanProgressCallback | None = None,
+    validate_epub: bool = False,
 ) -> ScanStats:
     stats = ScanStats()
     now = datetime.now(timezone.utc)
@@ -331,6 +407,7 @@ def scan_paths(
                 now=now,
                 verbose=verbose,
                 scan_roots=scanned_roots,
+                validate_epub=validate_epub,
             )
             if result.status == "unchanged":
                 stats.unchanged += 1
@@ -359,6 +436,20 @@ def scan_paths(
                 elif verbose and result.book is not None:
                     title = display_text(result.book.title or result.book.file_name)
                     print(f"indexed: {title}", flush=True)
+            elif result.status == "invalid_epub":
+                stats.invalid_epubs += 1
+                stats.files_deleted += result.files_deleted
+                detail = result.detail or "invalid EPUB"
+                stats.errors.append(f"{display_path(file_path)}: {detail}")
+                if on_progress:
+                    on_progress(index, total, file_path, "invalid")
+                elif verbose or result.files_deleted:
+                    print(f"invalid EPUB: {display_name(file_path)}", flush=True)
+                if result.files_deleted:
+                    print(
+                        f"deleted invalid EPUB: {display_path(file_path)}",
+                        flush=True,
+                    )
         except EbookMetaError as exc:
             stats.errors.append(f"{display_path(file_path)}: {exc}")
             if on_progress:

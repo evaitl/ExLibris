@@ -99,6 +99,10 @@ def _format_summary(stats) -> str:
         parts.append(f"skipped {stats.unchanged} unchanged")
     if stats.marked_missing:
         parts.append(f"marked {stats.marked_missing} missing")
+    if stats.invalid_epubs:
+        parts.append(f"skipped {stats.invalid_epubs} invalid EPUB(s)")
+    if stats.files_deleted:
+        parts.append(f"deleted {stats.files_deleted} file(s)")
     return "; ".join(parts)
 
 
@@ -133,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             covers_dir=resolve_covers_dir(settings.covers_dir),
             verbose=args.verbose,
             on_progress=progress,
+            validate_epub=True,
         )
 
     print(f"{_format_summary(stats)} in {db_path}.")

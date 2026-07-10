@@ -12,6 +12,8 @@ from pathlib import Path
 from exlibris.cleanup import (
     AuditReport,
     CleanupResult,
+    EpubRemovalContext,
+    EpubRemovalTotals,
     apply_duplicate_group,
     audit_epub_integrity,
     audit_library,
@@ -22,7 +24,6 @@ from exlibris.cleanup import (
     list_filename_fixes,
     load_books,
     purge_book,
-    remove_invalid_epubs,
     sanitize_book_filenames,
 )
 from exlibris.book_paths import prune_empty_directories
@@ -271,33 +272,28 @@ def _run_epub_validation_pass(
         if paths:
             _log(f"Validating {len(paths)} EPUB(s)...")
     on_invalid, on_valid_progress = _epub_validation_live_callbacks(quiet=quiet)
+    removal_totals = EpubRemovalTotals()
     invalid_items, validate_errors = audit_epub_integrity(
         paths,
         path_to_book_id=build_path_to_book_id(conn),
         deep=deep,
         ebook_meta_cmd=ebook_meta,
         conn=conn,
+        removal=EpubRemovalContext(
+            scan_roots=scan_roots,
+            covers_dir=covers_dir,
+            execute=execute,
+        ),
+        removal_totals=removal_totals,
         on_invalid=on_invalid,
         on_valid_progress=on_valid_progress,
     )
     invalid_lines = [item.display_line() for item in invalid_items]
     result.invalid_epubs = len(invalid_items)
     result.errors.extend(validate_errors)
-
-    if invalid_items:
-        files_deleted, rows_purged, covers_removed, remove_errors = (
-            remove_invalid_epubs(
-                conn,
-                invalid_items,
-                scan_roots=scan_roots,
-                covers_dir=covers_dir,
-                execute=execute,
-            )
-        )
-        result.files_deleted += files_deleted
-        result.rows_purged += rows_purged
-        result.covers_removed += covers_removed
-        result.errors.extend(remove_errors)
+    result.files_deleted += removal_totals.files_deleted
+    result.rows_purged += removal_totals.rows_purged
+    result.covers_removed += removal_totals.covers_removed
 
     return result, invalid_lines
 
@@ -432,6 +428,7 @@ def _index_new_files(
     args: argparse.Namespace,
     db_path: Path,
     covers_dir: Path,
+    scan_roots: list[Path],
     new_files: list[Path],
     result: CleanupResult,
 ) -> None:
@@ -465,6 +462,8 @@ def _index_new_files(
                     ebook_meta_cmd=ebook_meta_cmd,
                     covers_dir=resolved_covers,
                     verbose=args.verbose,
+                    scan_roots=scan_roots,
+                    validate_epub=True,
                 )
                 if scan_result.status == "indexed":
                     result.rows_indexed += 1
@@ -486,6 +485,15 @@ def _index_new_files(
                         )
                 elif scan_result.status == "unchanged" and args.verbose:
                     _log(f"unchanged during index: {path}")
+                elif scan_result.status == "invalid_epub":
+                    result.invalid_epubs += 1
+                    result.files_deleted += scan_result.files_deleted
+                    detail = scan_result.detail or "invalid EPUB"
+                    result.errors.append(f"{path}: {detail}")
+                    if not args.quiet:
+                        _log(f"invalid EPUB: {path.name}")
+                        if scan_result.files_deleted:
+                            _log(f"deleted invalid EPUB: {path}")
             except (EbookMetaError, Exception) as exc:
                 result.errors.append(f"{path}: {exc}")
             if not args.quiet and (
@@ -613,45 +621,42 @@ def cmd_run(args: argparse.Namespace) -> int:
             on_invalid, on_valid_progress = _epub_validation_live_callbacks(
                 quiet=args.quiet
             )
+            removal_totals = EpubRemovalTotals()
             invalid_items, validate_errors = audit_epub_integrity(
                 paths,
                 path_to_book_id=build_path_to_book_id(conn),
                 deep=args.validate_epubs_deep,
                 ebook_meta_cmd=args.ebook_meta,
                 conn=conn,
+                removal=EpubRemovalContext(
+                    scan_roots=scan_roots,
+                    covers_dir=covers_dir,
+                    execute=execute,
+                ),
+                removal_totals=removal_totals,
                 on_invalid=on_invalid,
                 on_valid_progress=on_valid_progress,
             )
             report.invalid_epubs = [item.display_line() for item in invalid_items]
             result.invalid_epubs = len(invalid_items)
             result.errors.extend(validate_errors)
+            result.files_deleted += removal_totals.files_deleted
+            result.rows_purged += removal_totals.rows_purged
+            result.covers_removed += removal_totals.covers_removed
 
         if not args.quiet:
             print_audit(report, quiet=args.quiet)
 
-        if args.validate_epubs and invalid_items:
-            files_deleted, rows_purged, covers_removed, remove_errors = (
-                remove_invalid_epubs(
-                    conn,
-                    invalid_items,
-                    scan_roots=scan_roots,
-                    covers_dir=covers_dir,
-                    execute=execute,
+        if args.validate_epubs and invalid_items and not args.quiet:
+            if execute:
+                _log(
+                    f"removed {len(invalid_items)} invalid EPUB(s): "
+                    f"{removal_totals.files_deleted} file(s), "
+                    f"{removal_totals.rows_purged} row(s), "
+                    f"{removal_totals.covers_removed} cover set(s)"
                 )
-            )
-            result.files_deleted += files_deleted
-            result.rows_purged += rows_purged
-            result.covers_removed += covers_removed
-            result.errors.extend(remove_errors)
-            if not args.quiet:
-                if execute:
-                    _log(
-                        f"removed {len(invalid_items)} invalid EPUB(s): "
-                        f"{files_deleted} file(s), {rows_purged} row(s), "
-                        f"{covers_removed} cover set(s)"
-                    )
-                else:
-                    _log(f"would remove {len(invalid_items)} invalid EPUB(s)")
+            else:
+                _log(f"would remove {len(invalid_items)} invalid EPUB(s)")
 
         repointed_ids: set[int] = set()
 
@@ -690,7 +695,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 result.errors.append(str(exc))
 
         if execute:
-            _index_new_files(args, db_path, covers_dir, report.new_files, result)
+            _index_new_files(
+                args, db_path, covers_dir, scan_roots, report.new_files, result
+            )
         elif report.new_files and not args.quiet:
             _log(f"would index {len(report.new_files)} new file(s)")
 

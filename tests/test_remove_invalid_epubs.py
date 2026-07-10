@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 
 from exlibris.cleanup import (
+    EpubRemovalContext,
+    EpubRemovalTotals,
     InvalidEpub,
     audit_epub_integrity,
     build_path_to_book_id,
@@ -180,3 +182,58 @@ def test_audit_epub_integrity_streams_invalid_and_valid_milestones(
         assert invalid[0].detail == "broken spine"
         assert [item.path.name for item in invalids] == ["b.epub"]
         assert valids == [(2, 3)]
+
+
+def test_audit_epub_integrity_removes_invalid_immediately(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good = root / "good.epub"
+        bad = root / "bad.epub"
+        good.write_bytes(b"good")
+        bad.write_text("not a zip", encoding="utf-8")
+        covers = root / "covers"
+        covers.mkdir()
+
+        conn = _init_db(root / "library.db")
+        conn.execute(
+            """
+            INSERT INTO books (id, file_path, file_name, file_size, file_mtime)
+            VALUES (1, ?, ?, ?, ?)
+            """,
+            (str(bad.resolve()), bad.name, bad.stat().st_size, bad.stat().st_mtime),
+        )
+        conn.commit()
+
+        call_order: list[str] = []
+
+        def fake_validate(path: Path, *, deep: bool = False, ebook_meta_cmd=None):
+            del deep, ebook_meta_cmd
+            call_order.append(path.name)
+            if path.name == "bad.epub":
+                return EpubValidationResult(
+                    path=path, ok=False, errors=["not a ZIP archive"]
+                )
+            return EpubValidationResult(path=path, ok=True, errors=[])
+
+        monkeypatch.setattr("exlibris.cleanup.validate_epub", fake_validate)
+
+        removal_totals = EpubRemovalTotals()
+        invalid, errors = audit_epub_integrity(
+            [good, bad],
+            path_to_book_id=build_path_to_book_id(conn),
+            conn=conn,
+            removal=EpubRemovalContext(
+                scan_roots=[root],
+                covers_dir=covers,
+                execute=True,
+            ),
+            removal_totals=removal_totals,
+        )
+        assert errors == []
+        assert len(invalid) == 1
+        assert call_order == ["bad.epub", "good.epub"]
+        assert not bad.exists()
+        assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 0
+        assert removal_totals.files_deleted == 1
+        assert removal_totals.rows_purged == 1
+        conn.close()
