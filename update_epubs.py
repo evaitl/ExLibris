@@ -82,6 +82,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Apply conversions and database updates (default is dry-run)",
     )
     parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Log every EPUB as it is converted (or would be in dry-run)",
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -90,7 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _update_log_callbacks(*, quiet: bool):
+def _update_log_callbacks(*, quiet: bool, verbose: bool):
     if quiet:
         return None, None
 
@@ -107,7 +113,8 @@ def _update_log_callbacks(*, quiet: bool):
         prefix = f"[{current:>{width}}/{total}]"
         if event in ("would_convert", "converted"):
             if (
-                current != 1
+                not verbose
+                and current != 1
                 and current != total
                 and current % SUCCESS_LOG_INTERVAL != 0
             ):
@@ -168,7 +175,7 @@ def _run_update(args: argparse.Namespace) -> int:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     configure_sqlite_connection(conn)
-    on_start, on_event = _update_log_callbacks(quiet=args.quiet)
+    on_start, on_event = _update_log_callbacks(quiet=args.quiet, verbose=args.verbose)
     try:
         stats = update_epubs(
             conn,

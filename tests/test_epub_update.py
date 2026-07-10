@@ -255,3 +255,28 @@ def test_update_epubs_logs_success_milestones_and_failures() -> None:
         assert ("removed", "convert failed") in events
         assert events.count(("converted", "")) == 2
         conn.close()
+
+
+def test_update_log_callbacks_verbose_logs_every_conversion(capsys) -> None:
+    from update_epubs import _update_log_callbacks
+
+    _, on_event = _update_log_callbacks(quiet=False, verbose=True)
+    for index in range(1, 4):
+        on_event(index, 3, f"book{index}.epub", "converted", "")
+
+    out = capsys.readouterr().out
+    assert out.count("converted:") == 3
+    assert "book2.epub" in out
+
+
+def test_update_log_callbacks_default_skips_middle_milestones(capsys) -> None:
+    from update_epubs import _update_log_callbacks
+
+    _, on_event = _update_log_callbacks(quiet=False, verbose=False)
+    for index in range(1, 4):
+        on_event(index, 3, f"book{index}.epub", "converted", "")
+
+    out = capsys.readouterr().out
+    assert "book1.epub" in out
+    assert "book2.epub" not in out
+    assert "book3.epub" in out

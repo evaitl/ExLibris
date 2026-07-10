@@ -426,6 +426,7 @@ If some EPUBs fail in readers, re-encode them with Calibre:
 ```bash
 ./update_epubs.py                         # dry-run: count candidates
 ./update_epubs.py --execute               # convert in place, update DB
+./update_epubs.py --execute -v            # log every file as it is converted
 ./update_epubs.py --execute -p ~/books  # limit to one scan root
 ```
 
