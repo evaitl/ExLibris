@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from exlibris.ebook_convert import EbookConvertError, convert_epub_to_version2
+from exlibris.ebook_convert import EPUB2_CONVERT_OPTIONS, EbookConvertError, convert_epub_to_version2
 
 
 def test_convert_epub_to_version2_invokes_calibre() -> None:
@@ -27,7 +27,7 @@ def test_convert_epub_to_version2_invokes_calibre() -> None:
         run.assert_called_once()
         args = run.call_args.args[0]
         assert args[:3] == ["/usr/bin/ebook-convert", str(source), str(dest)]
-        assert "--epub-version=2" in args
+        assert args[3:] == list(EPUB2_CONVERT_OPTIONS)
 
 
 def test_convert_epub_to_version2_raises_on_failure() -> None:

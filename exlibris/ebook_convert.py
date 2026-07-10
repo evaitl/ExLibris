@@ -25,6 +25,17 @@ def find_ebook_convert(explicit: str | None = None) -> str:
     return found
 
 
+# Flags that preserve a raster cover when normalizing to EPUB 2. Without
+# --no-svg-cover, Calibre may keep an SVG cover that EPUB 2 readers and
+# ebook-meta --get-cover treat as missing (blank cover page).
+EPUB2_CONVERT_OPTIONS = (
+    "--epub-version=2",
+    "--prefer-metadata-cover",
+    "--no-svg-cover",
+    "--preserve-cover-aspect-ratio",
+)
+
+
 def convert_epub_to_version2(
     source: Path,
     dest: Path,
@@ -36,7 +47,7 @@ def convert_epub_to_version2(
     dest = dest.expanduser().resolve()
     cmd = find_ebook_convert(ebook_convert_cmd)
     result = subprocess.run(
-        [cmd, str(source), str(dest), "--epub-version=2"],
+        [cmd, str(source), str(dest), *EPUB2_CONVERT_OPTIONS],
         capture_output=True,
         text=True,
         check=False,

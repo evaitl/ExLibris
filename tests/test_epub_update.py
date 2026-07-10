@@ -114,21 +114,27 @@ def test_update_epubs_execute_marks_converted() -> None:
 
         with patch("exlibris.epub_update.convert_epub_to_version2", side_effect=fake_convert):
             with patch("exlibris.epub_update.validate_epub_structure", side_effect=fake_validate):
-                stats = update_epubs(
-                    conn,
-                    [root],
-                    covers,
-                    execute=True,
-                )
+                with patch(
+                    "exlibris.epub_update._refresh_cover_from_epub",
+                    return_value="data/covers/01/1.jpg",
+                ) as refresh:
+                    stats = update_epubs(
+                        conn,
+                        [root],
+                        covers,
+                        execute=True,
+                    )
 
+        refresh.assert_called_once()
         assert stats.converted == 1
         assert stats.removed == 0
         assert path.read_bytes() == b"new epub 2"
         row = conn.execute(
-            "SELECT epub_version2, epub_validated, content_hash FROM books WHERE id = 1"
+            "SELECT epub_version2, epub_validated, cover_path, content_hash FROM books WHERE id = 1"
         ).fetchone()
         assert int(row["epub_version2"]) == 1
         assert int(row["epub_validated"]) == 1
+        assert row["cover_path"] == "data/covers/01/1.jpg"
         assert row["content_hash"] != "abc"
         assert oct(path.stat().st_mode & 0o777) == "0o644"
         conn.close()

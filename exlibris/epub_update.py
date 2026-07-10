@@ -11,8 +11,10 @@ from pathlib import Path
 
 from exlibris.book_paths import delete_file_under_roots, path_is_under_any_root
 from exlibris.cleanup import purge_book
-from exlibris.cover_paths import remove_cover_files
+from exlibris.config import PROJECT_ROOT
+from exlibris.cover_paths import cover_dest_base, remove_cover_files
 from exlibris.ebook_convert import EbookConvertError, convert_epub_to_version2
+from exlibris.ebook_meta import extract_cover
 from exlibris.epub_validate import validate_epub_structure
 from exlibris.file_hash import sha1_file
 from exlibris.sqlite_retry import run_write_with_retry
@@ -101,29 +103,67 @@ def _mark_converted(
     file_size: int,
     file_mtime: float,
     epub_validated: bool,
+    cover_path: str | None = None,
 ) -> None:
     def writer() -> None:
-        conn.execute(
-            """
-            UPDATE books
-            SET content_hash = ?,
-                file_size = ?,
-                file_mtime = ?,
-                epub_version2 = 1,
-                epub_validated = ?,
-                epub_deep_validated = 0
-            WHERE id = ?
-            """,
-            (
-                content_hash,
-                file_size,
-                file_mtime,
-                1 if epub_validated else 0,
-                book_id,
-            ),
-        )
+        if cover_path is None:
+            conn.execute(
+                """
+                UPDATE books
+                SET content_hash = ?,
+                    file_size = ?,
+                    file_mtime = ?,
+                    epub_version2 = 1,
+                    epub_validated = ?,
+                    epub_deep_validated = 0
+                WHERE id = ?
+                """,
+                (
+                    content_hash,
+                    file_size,
+                    file_mtime,
+                    1 if epub_validated else 0,
+                    book_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE books
+                SET content_hash = ?,
+                    file_size = ?,
+                    file_mtime = ?,
+                    epub_version2 = 1,
+                    epub_validated = ?,
+                    epub_deep_validated = 0,
+                    cover_path = ?
+                WHERE id = ?
+                """,
+                (
+                    content_hash,
+                    file_size,
+                    file_mtime,
+                    1 if epub_validated else 0,
+                    cover_path,
+                    book_id,
+                ),
+            )
 
     run_write_with_retry(conn, writer)
+
+
+def _refresh_cover_from_epub(
+    path: Path,
+    *,
+    book_id: int,
+    covers_dir: Path,
+) -> str | None:
+    if not covers_dir.is_dir():
+        return None
+    cover_file = extract_cover(path, cover_dest_base(covers_dir, book_id))
+    if cover_file is None:
+        return None
+    return str(cover_file.relative_to(PROJECT_ROOT))
 
 
 def _remove_failed_book(
@@ -210,6 +250,11 @@ def update_epubs(
                 continue
             stat = path.stat()
             content_hash = sha1_file(path)
+            cover_path = _refresh_cover_from_epub(
+                path,
+                book_id=row.id,
+                covers_dir=covers_dir,
+            )
             _mark_converted(
                 conn,
                 book_id=row.id,
@@ -217,6 +262,7 @@ def update_epubs(
                 file_size=stat.st_size,
                 file_mtime=stat.st_mtime,
                 epub_validated=True,
+                cover_path=cover_path,
             )
             stats.converted += 1
             if on_event is not None:

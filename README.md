@@ -429,7 +429,7 @@ If some EPUBs fail in readers, re-encode them with Calibre:
 ./update_epubs.py --execute -p ~/books  # limit to one scan root
 ```
 
-Uses `ebook-convert … --epub-version=2`, replaces each file under its original path, updates `content_hash` / size / mtime, and sets `epub_version2` so interrupted runs skip finished books. After each conversion, structural EPUB validation runs automatically; valid files are marked `epub_validated`. Failed conversions or post-conversion validation failures delete the file and purge the database row (and cover). Requires Calibre on `PATH` and the project venv. Uses the same `data/library.lock` as scan and cleanup — do not run concurrently with those jobs.
+Uses `ebook-convert … --epub-version=2 --prefer-metadata-cover --no-svg-cover --preserve-cover-aspect-ratio`, replaces each file under its original path, updates `content_hash` / size / mtime, and sets `epub_version2` so interrupted runs skip finished books. After each conversion, structural EPUB validation runs automatically; valid files are marked `epub_validated`. The embedded cover is re-extracted into `data/covers/` for the web UI (`--no-svg-cover` avoids blank SVG covers in EPUB 2). Failed conversions or post-conversion validation failures delete the file and purge the database row (and cover). Requires Calibre on `PATH` and the project venv. Uses the same `data/library.lock` as scan and cleanup — do not run concurrently with those jobs.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation history and server deployment notes.
 
