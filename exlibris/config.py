@@ -11,6 +11,8 @@ DEFAULT_BOOKS_DIR = Path("/media/books")
 DEFAULT_DATABASE_PATH = DATA_DIR / "library.db"
 DEFAULT_COVERS_DIR = DATA_DIR / "covers"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
+DEFAULT_WEB_HOST = "127.0.0.1"
+DEFAULT_WEB_PORT = 8080
 
 
 @dataclass
@@ -18,6 +20,8 @@ class Settings:
     scan_paths: list[Path] = field(default_factory=lambda: [DEFAULT_BOOKS_DIR])
     database_path: Path = field(default_factory=lambda: Path("data/library.db"))
     covers_dir: Path = field(default_factory=lambda: Path("data/covers"))
+    web_host: str = DEFAULT_WEB_HOST
+    web_port: int = DEFAULT_WEB_PORT
 
 
 def default_config_path() -> Path:
@@ -41,14 +45,31 @@ def _coerce_path(value: object) -> Path:
     return Path(str(value))
 
 
+def _coerce_web_port(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("web_port must be an integer")
+    try:
+        port = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("web_port must be an integer") from exc
+    if not (1 <= port <= 65535):
+        raise ValueError("web_port must be between 1 and 65535")
+    return port
+
+
 def settings_from_dict(data: dict) -> Settings:
     scan_paths = data.get("scan_paths", [str(DEFAULT_BOOKS_DIR)])
     if not isinstance(scan_paths, list):
         raise ValueError("scan_paths must be a list")
+    web_host = data.get("web_host", DEFAULT_WEB_HOST)
+    if not isinstance(web_host, str) or not web_host.strip():
+        raise ValueError("web_host must be a non-empty string")
     return Settings(
         scan_paths=[_coerce_path(path) for path in scan_paths],
         database_path=_coerce_path(data.get("database_path", "data/library.db")),
         covers_dir=_coerce_path(data.get("covers_dir", "data/covers")),
+        web_host=web_host.strip(),
+        web_port=_coerce_web_port(data.get("web_port", DEFAULT_WEB_PORT)),
     )
 
 
@@ -56,6 +77,8 @@ def _apply_env(settings: Settings) -> Settings:
     database_path = settings.database_path
     covers_dir = settings.covers_dir
     scan_paths = list(settings.scan_paths)
+    web_host = settings.web_host
+    web_port = settings.web_port
 
     env_db = os.environ.get("EXLIBRIS_DATABASE_PATH")
     if env_db:
@@ -73,10 +96,20 @@ def _apply_env(settings: Settings) -> Settings:
             if part.strip()
         ]
 
+    env_host = os.environ.get("EXLIBRIS_WEB_HOST")
+    if env_host and env_host.strip():
+        web_host = env_host.strip()
+
+    env_port = os.environ.get("EXLIBRIS_WEB_PORT")
+    if env_port:
+        web_port = _coerce_web_port(env_port)
+
     return Settings(
         scan_paths=scan_paths,
         database_path=database_path,
         covers_dir=covers_dir,
+        web_host=web_host,
+        web_port=web_port,
     )
 
 

@@ -42,15 +42,33 @@ def test_load_settings_applies_env_overrides(monkeypatch) -> None:
                     "scan_paths": ["/books"],
                     "database_path": "data/test.db",
                     "covers_dir": "data/covers",
+                    "web_host": "127.0.0.1",
+                    "web_port": 8080,
                 }
             ),
             encoding="utf-8",
         )
         monkeypatch.setenv("EXLIBRIS_DATABASE_PATH", "/tmp/custom.db")
         monkeypatch.setenv("EXLIBRIS_SCAN_PATHS", "/one:/two")
+        monkeypatch.setenv("EXLIBRIS_WEB_HOST", "0.0.0.0")
+        monkeypatch.setenv("EXLIBRIS_WEB_PORT", "9090")
         settings = load_settings(path)
         assert settings.database_path == Path("/tmp/custom.db")
         assert [str(path) for path in settings.scan_paths] == ["/one", "/two"]
+        assert settings.web_host == "0.0.0.0"
+        assert settings.web_port == 9090
+
+
+def test_settings_from_dict_reads_web_bind() -> None:
+    settings = settings_from_dict(
+        {
+            "scan_paths": ["/books"],
+            "web_host": "0.0.0.0",
+            "web_port": 3000,
+        }
+    )
+    assert settings.web_host == "0.0.0.0"
+    assert settings.web_port == 3000
 
 
 def test_settings_from_dict_resolves_relative_scan_paths() -> None:

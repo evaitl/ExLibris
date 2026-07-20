@@ -3,5 +3,7 @@
     "/media/books"
   ],
   "database_path": "data/library.db",
-  "covers_dir": "data/covers"
+  "covers_dir": "data/covers",
+  "web_host": "127.0.0.1",
+  "web_port": 8080
 }

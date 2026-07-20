@@ -59,6 +59,7 @@ ExLibris/
   cleanup_library.py   ← reconcile files vs database
   manage_users.py      ← list/delete web accounts
   scan_books.py        ← standalone scan entry point
+  serve_web.py         ← built-in CGI web server
   update_epubs.py      ← re-encode EPUBs to version 2
   web/cgi-bin/     ← web UI
   exlibris/        ← Python package
@@ -314,17 +315,18 @@ Legacy `cover.py?id=…` URLs redirect (301) to the static cover URL.
 
 Downloads are served only from files under configured scan paths (default: `/media/books`). Fetch metadata updates the database and cover images only — EPUB files are not modified.
 
-### Development server (quick test)
+### Built-in web server
+
+Serve the CGI UI without Apache. Host and port come from `config.json` (`web_host`, `web_port`; defaults `127.0.0.1:8080`):
 
 ```bash
-cd web
-EXLIBRIS_CGI_PREFIX=/cgi-bin/ \
-EXLIBRIS_STATIC_URL=/static/style.css \
-EXLIBRIS_DATABASE_PATH="$(pwd)/../data/library.db" \
-python3 -m http.server --cgi 8080 --bind 127.0.0.1
+./serve_web.py
+# or: exlibris serve
 ```
 
-Open [http://127.0.0.1:8080/cgi-bin/index.py](http://127.0.0.1:8080/cgi-bin/index.py).
+Open [http://127.0.0.1:8080/](http://127.0.0.1:8080/) (redirects to the library). Override bind settings with `--host` / `--port`, or `EXLIBRIS_WEB_HOST` / `EXLIBRIS_WEB_PORT`.
+
+The server runs CGI under `/cgi-bin/`, static assets under `/static/`, and cover images under `/covers/` from `covers_dir`.
 
 ### Apache
 
@@ -406,10 +408,12 @@ If that fails, install Calibre system-wide or symlink the binary into `/usr/loca
 | `scan_paths` | Directories to scan recursively (default: `/media/books`) |
 | `database_path` | SQLite database file (default: `data/library.db`) |
 | `covers_dir` | Cover images directory (default: `data/covers`) |
+| `web_host` | Bind address for `serve_web.py` / `exlibris serve` (default: `127.0.0.1`) |
+| `web_port` | Bind port for the built-in web server (default: `8080`) |
 
 Copy `config.json.example` to `config.json` and edit as needed. If you still have `config.yaml` from an older install, convert it to JSON (same field names) or rely on environment variables.
 
-Environment variables override config values, for example `EXLIBRIS_DATABASE_PATH` and `EXLIBRIS_SCAN_PATHS` (paths separated with `:` on Linux).
+Environment variables override config values, for example `EXLIBRIS_DATABASE_PATH`, `EXLIBRIS_SCAN_PATHS` (paths separated with `:` on Linux), `EXLIBRIS_WEB_HOST`, and `EXLIBRIS_WEB_PORT`.
 
 ## How it works
 

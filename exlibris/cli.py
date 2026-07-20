@@ -180,6 +180,29 @@ def cleanup_run(
     )
 
 
+@app.command("serve")
+def serve_cmd(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config.json"
+    ),
+    host: str | None = typer.Option(
+        None, "--host", help="Bind address (default: web_host from config)"
+    ),
+    port: int | None = typer.Option(
+        None, "--port", "-p", help="Bind port (default: web_port from config)"
+    ),
+) -> None:
+    """Serve the CGI web UI with the built-in HTTP server."""
+    from exlibris.web_server import serve
+
+    settings = load_settings(config)
+    try:
+        serve(settings, host=host, port=port)
+    except OSError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @user_app.command("create")
 def user_create(
     username: str = typer.Argument(help="Login username"),
