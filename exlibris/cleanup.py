@@ -28,8 +28,10 @@ from exlibris.cover_paths import (
 )
 from exlibris.library_cache import refresh_library_stats
 from exlibris.epub_validate import validate_epub
+from exlibris.ebook_convert import convert_epub2_in_place
 from exlibris.ebook_meta import EbookMetaError
 from exlibris.filenames import (
+    display_name,
     display_path,
     filename_needs_update,
     target_filename,
@@ -558,12 +560,57 @@ def mark_epub_validated(
     mark_epub_validated_batch(conn, [book_id], deep=deep)
 
 
+def _books_have_epub_version2_column(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute("PRAGMA table_info(books)").fetchall()
+    return any(str(row[1]) == "epub_version2" for row in rows)
+
+
+def _record_repaired_epub(
+    conn: sqlite3.Connection,
+    book_id: int,
+    path: Path,
+    *,
+    deep: bool,
+) -> None:
+    """Update file stats and validation flags after a successful convert repair."""
+    try:
+        stat = path.stat()
+        content_hash = sha1_file(path)
+    except OSError:
+        mark_epub_validated(conn, book_id, deep=deep)
+        return
+
+    has_version2 = _books_have_epub_version2_column(conn)
+    has_validation = _books_have_epub_validation_columns(conn)
+
+    def writer() -> None:
+        sets = ["content_hash = ?", "file_size = ?", "file_mtime = ?"]
+        values: list[object] = [content_hash, stat.st_size, stat.st_mtime]
+        if has_validation:
+            sets.append("epub_validated = 1")
+            if deep:
+                sets.append("epub_deep_validated = 1")
+        if has_version2:
+            sets.append("epub_version2 = 1")
+        values.append(book_id)
+        conn.execute(
+            f"UPDATE books SET {', '.join(sets)} WHERE id = ?",
+            values,
+        )
+
+    try:
+        run_write_with_retry(conn, writer)
+    except sqlite3.OperationalError:
+        return
+
+
 def audit_epub_integrity(
     paths: list[Path],
     *,
     path_to_book_id: dict[str, int] | None = None,
     deep: bool = False,
     ebook_meta_cmd: str | None = None,
+    ebook_convert_cmd: str | None = None,
     conn: sqlite3.Connection | None = None,
     removal: EpubRemovalContext | None = None,
     removal_totals: EpubRemovalTotals | None = None,
@@ -580,6 +627,8 @@ def audit_epub_integrity(
     pass validation are marked immediately so later runs can skip them.
     When ``removal`` is provided, each invalid EPUB is handled as soon as it
     is found instead of waiting until the end of the pass.
+    With ``removal.execute``, invalid EPUBs are run through convert_epub2 and
+    re-validated before deletion.
     """
     path_to_book_id = path_to_book_id or {}
     invalid: list[InvalidEpub] = []
@@ -601,9 +650,66 @@ def audit_epub_integrity(
             continue
         if not result.ok:
             detail = "; ".join(result.errors) if result.errors else "invalid"
+            resolved = path.resolve()
+            book_id = path_to_book_id.get(str(resolved))
+
+            # Before deleting (execute mode), try EPUB 2 conversion + re-validate.
+            if (
+                removal is not None
+                and removal.execute
+                and path.suffix.lower() == ".epub"
+                and path.is_file()
+            ):
+                print(
+                    f"invalid EPUB, trying convert_epub2: {display_name(path)}",
+                    flush=True,
+                )
+                converted = convert_epub2_in_place(
+                    path,
+                    ebook_meta_cmd=ebook_meta_cmd,
+                    ebook_convert_cmd=ebook_convert_cmd,
+                )
+                if converted:
+                    try:
+                        result = validate_epub(
+                            path,
+                            deep=deep,
+                            ebook_meta_cmd=ebook_meta_cmd,
+                        )
+                    except EbookMetaError as exc:
+                        errors.append(f"{path}: {exc}")
+                        detail = (
+                            f"{detail}; EPUB 2 convert succeeded but re-check "
+                            f"failed: {exc}"
+                        )
+                        result = None
+                    if result is not None and result.ok:
+                        valid_count += 1
+                        if conn is not None and book_id is not None:
+                            _record_repaired_epub(
+                                conn, book_id, path, deep=deep
+                            )
+                        if (
+                            on_valid_progress is not None
+                            and valid_progress_interval > 0
+                            and valid_count % valid_progress_interval == 0
+                        ):
+                            on_valid_progress(valid_count, total)
+                        continue
+                    if result is not None:
+                        retry_detail = (
+                            "; ".join(result.errors) if result.errors else "invalid"
+                        )
+                        detail = (
+                            f"{detail}; still invalid after EPUB 2 convert: "
+                            f"{retry_detail}"
+                        )
+                else:
+                    detail = f"{detail}; EPUB 2 conversion failed"
+
             item = InvalidEpub(
-                path=path.resolve(),
-                book_id=path_to_book_id.get(str(path.resolve())),
+                path=resolved,
+                book_id=book_id,
                 detail=detail,
             )
             invalid.append(item)

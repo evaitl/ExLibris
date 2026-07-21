@@ -19,6 +19,7 @@ from exlibris.config import PROJECT_ROOT, resolve_covers_dir, resolve_scan_path
 from exlibris.cover_paths import cover_dest_base, remove_cover_files
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
+from exlibris.ebook_convert import convert_epub2_in_place
 from exlibris.epub_validate import validate_epub_structure
 from exlibris.file_hash import sha1_file
 from exlibris.library_cache import refresh_library_stats
@@ -26,8 +27,6 @@ from exlibris.filenames import display_name, display_path, display_text, ensure_
 from exlibris.models import Book
 
 ScanProgressCallback = Callable[[int, int, Path, str], None]
-
-_convert_epub2_module = None
 
 
 @dataclass
@@ -205,51 +204,6 @@ def _validate_epub_for_index(file_path: Path) -> str | None:
     if result.errors:
         return "; ".join(result.errors)
     return "invalid EPUB"
-
-
-def _load_convert_epub2():
-    """Load the standalone convert_epub2.py script as a module."""
-    global _convert_epub2_module
-    if _convert_epub2_module is not None:
-        return _convert_epub2_module
-
-    import importlib.util
-
-    script = PROJECT_ROOT / "convert_epub2.py"
-    spec = importlib.util.spec_from_file_location("convert_epub2", script)
-    if spec is None or spec.loader is None:
-        raise FileNotFoundError(f"convert_epub2.py not found at {script}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _convert_epub2_module = module
-    return module
-
-
-def convert_epub2_in_place(
-    file_path: Path,
-    *,
-    ebook_meta_cmd: str | None = None,
-    ebook_convert_cmd: str | None = None,
-    verbose: bool = False,
-) -> bool:
-    """Run convert_epub2.py's in-place EPUB 2 conversion on one file."""
-    try:
-        module = _load_convert_epub2()
-        convert_cmd = module.find_tool("ebook-convert", ebook_convert_cmd)
-        meta_cmd = module.find_tool("ebook-meta", ebook_meta_cmd)
-    except FileNotFoundError as exc:
-        if verbose:
-            print(f"convert_epub2 unavailable: {exc}", flush=True)
-        return False
-    return bool(
-        module.convert_in_place(
-            file_path,
-            convert_cmd=convert_cmd,
-            meta_cmd=meta_cmd,
-            dry_run=False,
-            verbose=verbose,
-        )
-    )
 
 
 def _remove_invalid_epub_on_scan(

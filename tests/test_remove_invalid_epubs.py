@@ -216,6 +216,9 @@ def test_audit_epub_integrity_removes_invalid_immediately(monkeypatch) -> None:
             return EpubValidationResult(path=path, ok=True, errors=[])
 
         monkeypatch.setattr("exlibris.cleanup.validate_epub", fake_validate)
+        monkeypatch.setattr(
+            "exlibris.cleanup.convert_epub2_in_place", lambda *_a, **_k: False
+        )
 
         removal_totals = EpubRemovalTotals()
         invalid, errors = audit_epub_integrity(
@@ -231,9 +234,117 @@ def test_audit_epub_integrity_removes_invalid_immediately(monkeypatch) -> None:
         )
         assert errors == []
         assert len(invalid) == 1
+        assert "EPUB 2 conversion failed" in invalid[0].detail
         assert call_order == ["bad.epub", "good.epub"]
         assert not bad.exists()
         assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 0
         assert removal_totals.files_deleted == 1
         assert removal_totals.rows_purged == 1
+        conn.close()
+
+
+def test_audit_epub_integrity_converts_then_keeps_when_valid(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bad = root / "repairable.epub"
+        bad.write_text("not a zip", encoding="utf-8")
+        covers = root / "covers"
+        covers.mkdir()
+
+        conn = _init_db(root / "library.db")
+        # Add validation columns used by repair recording.
+        conn.execute("ALTER TABLE books ADD COLUMN epub_validated INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN epub_deep_validated INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute("ALTER TABLE books ADD COLUMN epub_version2 INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            """
+            INSERT INTO books (id, file_path, file_name, file_size, file_mtime)
+            VALUES (1, ?, ?, ?, ?)
+            """,
+            (str(bad.resolve()), bad.name, bad.stat().st_size, bad.stat().st_mtime),
+        )
+        conn.commit()
+
+        validate_calls = {"n": 0}
+
+        def fake_validate(path: Path, *, deep: bool = False, ebook_meta_cmd=None):
+            del deep, ebook_meta_cmd
+            validate_calls["n"] += 1
+            if validate_calls["n"] == 1:
+                return EpubValidationResult(
+                    path=path, ok=False, errors=["not a ZIP archive"]
+                )
+            return EpubValidationResult(path=path, ok=True, errors=[])
+
+        def fake_convert(path: Path, **_kwargs) -> bool:
+            path.write_bytes(b"PK\x03\x04repaired-placeholder")
+            return True
+
+        monkeypatch.setattr("exlibris.cleanup.validate_epub", fake_validate)
+        monkeypatch.setattr("exlibris.cleanup.convert_epub2_in_place", fake_convert)
+
+        removal_totals = EpubRemovalTotals()
+        invalid, errors = audit_epub_integrity(
+            [bad],
+            path_to_book_id=build_path_to_book_id(conn),
+            conn=conn,
+            removal=EpubRemovalContext(
+                scan_roots=[root],
+                covers_dir=covers,
+                execute=True,
+            ),
+            removal_totals=removal_totals,
+        )
+        assert errors == []
+        assert invalid == []
+        assert bad.is_file()
+        assert removal_totals.files_deleted == 0
+        row = conn.execute(
+            "SELECT epub_validated, epub_version2 FROM books WHERE id = 1"
+        ).fetchone()
+        assert row["epub_validated"] == 1
+        assert row["epub_version2"] == 1
+        conn.close()
+
+
+def test_audit_epub_integrity_dry_run_does_not_convert(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bad = root / "bad.epub"
+        bad.write_text("not a zip", encoding="utf-8")
+        covers = root / "covers"
+        covers.mkdir()
+        conn = _init_db(root / "library.db")
+
+        def fake_validate(path: Path, *, deep: bool = False, ebook_meta_cmd=None):
+            del deep, ebook_meta_cmd
+            return EpubValidationResult(
+                path=path, ok=False, errors=["not a ZIP archive"]
+            )
+
+        convert_calls = {"n": 0}
+
+        def fake_convert(*_a, **_k) -> bool:
+            convert_calls["n"] += 1
+            return False
+
+        monkeypatch.setattr("exlibris.cleanup.validate_epub", fake_validate)
+        monkeypatch.setattr("exlibris.cleanup.convert_epub2_in_place", fake_convert)
+
+        invalid, errors = audit_epub_integrity(
+            [bad],
+            path_to_book_id={},
+            conn=conn,
+            removal=EpubRemovalContext(
+                scan_roots=[root],
+                covers_dir=covers,
+                execute=False,
+            ),
+        )
+        assert errors == []
+        assert len(invalid) == 1
+        assert convert_calls["n"] == 0
+        assert bad.is_file()
         conn.close()
