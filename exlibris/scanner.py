@@ -27,6 +27,8 @@ from exlibris.models import Book
 
 ScanProgressCallback = Callable[[int, int, Path, str], None]
 
+_convert_epub2_module = None
+
 
 @dataclass
 class ScanStats:
@@ -205,6 +207,51 @@ def _validate_epub_for_index(file_path: Path) -> str | None:
     return "invalid EPUB"
 
 
+def _load_convert_epub2():
+    """Load the standalone convert_epub2.py script as a module."""
+    global _convert_epub2_module
+    if _convert_epub2_module is not None:
+        return _convert_epub2_module
+
+    import importlib.util
+
+    script = PROJECT_ROOT / "convert_epub2.py"
+    spec = importlib.util.spec_from_file_location("convert_epub2", script)
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"convert_epub2.py not found at {script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _convert_epub2_module = module
+    return module
+
+
+def convert_epub2_in_place(
+    file_path: Path,
+    *,
+    ebook_meta_cmd: str | None = None,
+    ebook_convert_cmd: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Run convert_epub2.py's in-place EPUB 2 conversion on one file."""
+    try:
+        module = _load_convert_epub2()
+        convert_cmd = module.find_tool("ebook-convert", ebook_convert_cmd)
+        meta_cmd = module.find_tool("ebook-meta", ebook_meta_cmd)
+    except FileNotFoundError as exc:
+        if verbose:
+            print(f"convert_epub2 unavailable: {exc}", flush=True)
+        return False
+    return bool(
+        module.convert_in_place(
+            file_path,
+            convert_cmd=convert_cmd,
+            meta_cmd=meta_cmd,
+            dry_run=False,
+            verbose=verbose,
+        )
+    )
+
+
 def _remove_invalid_epub_on_scan(
     session: Session,
     file_path: Path,
@@ -245,6 +292,7 @@ def scan_single_file(
     file_path: Path,
     *,
     ebook_meta_cmd: str | None = None,
+    ebook_convert_cmd: str | None = None,
     covers_dir: Path | None = None,
     now: datetime | None = None,
     verbose: bool = False,
@@ -297,58 +345,111 @@ def scan_single_file(
         if skip_reason == "unchanged":
             return FileScanResult("unchanged", existing)
 
+        converted_to_epub2 = False
         if validate_epub:
             epub_error = _validate_epub_for_index(file_path)
             if epub_error is not None:
-                files_deleted, removal_notes = _remove_invalid_epub_on_scan(
-                    session,
+                initial_error = epub_error
+                print(
+                    f"invalid EPUB, trying convert_epub2: {display_name(file_path)}",
+                    flush=True,
+                )
+                converted = convert_epub2_in_place(
                     file_path,
-                    scan_roots=scan_roots,
-                    covers_dir=covers_dir,
-                    existing=existing,
+                    ebook_meta_cmd=ebook_meta_cmd,
+                    ebook_convert_cmd=ebook_convert_cmd,
+                    verbose=verbose,
                 )
-                detail = epub_error
-                if removal_notes:
-                    detail = f"{epub_error} ({'; '.join(removal_notes)})"
-                return FileScanResult(
-                    "invalid_epub",
-                    detail=detail,
-                    files_deleted=files_deleted,
-                )
+                if converted:
+                    epub_error = _validate_epub_for_index(file_path)
+                    if epub_error is None:
+                        converted_to_epub2 = True
+                        # Conversion rewrote the file; refresh size/mtime/hash.
+                        stat = file_path.stat()
+                        content_hash = sha1_file(file_path)
+                        skip_reason = _skip_reason_before_calibre(
+                            session,
+                            existing=existing,
+                            content_hash=content_hash,
+                        )
+                        if skip_reason == "duplicate":
+                            repointed = _try_repoint_duplicate(
+                                session,
+                                file_path=file_path,
+                                file_size=stat.st_size,
+                                file_mtime=stat.st_mtime,
+                                content_hash=content_hash,
+                                existing=existing,
+                                scan_roots=scan_roots,
+                            )
+                            if repointed is not None:
+                                return repointed
+                            return FileScanResult("duplicate", existing)
+                        if skip_reason == "unchanged":
+                            return FileScanResult("unchanged", existing)
+                    else:
+                        epub_error = (
+                            f"{initial_error}; still invalid after EPUB 2 convert: "
+                            f"{epub_error}"
+                        )
+                else:
+                    epub_error = f"{initial_error}; EPUB 2 conversion failed"
+
+                if not converted_to_epub2:
+                    files_deleted, removal_notes = _remove_invalid_epub_on_scan(
+                        session,
+                        file_path,
+                        scan_roots=scan_roots,
+                        covers_dir=covers_dir,
+                        existing=existing,
+                    )
+                    detail = epub_error
+                    if removal_notes:
+                        detail = f"{epub_error} ({'; '.join(removal_notes)})"
+                    return FileScanResult(
+                        "invalid_epub",
+                        detail=detail,
+                        files_deleted=files_deleted,
+                    )
 
         meta = read_metadata(file_path, ebook_meta_cmd=ebook_meta_cmd)
         if meta.errors and verbose:
             for err in meta.errors:
                 print(f"{display_path(file_path)}: {err}", flush=True)
 
-        book = upsert_book(
-            session,
-            {
-                "file_path": file_path_str,
-                "file_name": file_path.name,
-                "format": meta.format or file_path.suffix.lower().lstrip("."),
-                "file_size": stat.st_size,
-                "file_mtime": stat.st_mtime,
-                "content_hash": content_hash,
-                "title": meta.title or file_path.stem,
-                "sort_title": meta.sort_title,
-                "authors": meta.authors,
-                "publisher": meta.publisher,
-                "published_date": meta.published_date,
-                "isbn": meta.isbn,
-                "language": meta.language,
-                "description": meta.description,
-                "series": meta.series,
-                "series_index": meta.series_index,
-                "tags": meta.tags,
-                "last_scanned_at": now,
-                **(
-                    {"epub_validated": True, "epub_deep_validated": False}
-                    if validate_epub
-                    else {}
-                ),
-            },
-        )
+        book_data: dict = {
+            "file_path": file_path_str,
+            "file_name": file_path.name,
+            "format": meta.format or file_path.suffix.lower().lstrip("."),
+            "file_size": stat.st_size,
+            "file_mtime": stat.st_mtime,
+            "content_hash": content_hash,
+            "title": meta.title or file_path.stem,
+            "sort_title": meta.sort_title,
+            "authors": meta.authors,
+            "publisher": meta.publisher,
+            "published_date": meta.published_date,
+            "isbn": meta.isbn,
+            "language": meta.language,
+            "description": meta.description,
+            "series": meta.series,
+            "series_index": meta.series_index,
+            "tags": meta.tags,
+            "last_scanned_at": now,
+        }
+        if validate_epub:
+            book_data["epub_validated"] = True
+            book_data["epub_deep_validated"] = False
+        if converted_to_epub2:
+            book_data["epub_version2"] = True
+
+        book = upsert_book(session, book_data)
+        # upsert_book clears validation flags when the file changes; restore them.
+        if validate_epub:
+            book.epub_validated = True
+            book.epub_deep_validated = False
+        if converted_to_epub2:
+            book.epub_version2 = True
         session.flush()
 
         cover_file = extract_cover(
@@ -377,6 +478,7 @@ def scan_paths(
     paths: list[Path],
     *,
     ebook_meta_cmd: str | None = None,
+    ebook_convert_cmd: str | None = None,
     covers_dir: Path | None = None,
     verbose: bool = False,
     on_progress: ScanProgressCallback | None = None,
@@ -403,6 +505,7 @@ def scan_paths(
                 session,
                 file_path,
                 ebook_meta_cmd=ebook_meta_cmd,
+                ebook_convert_cmd=ebook_convert_cmd,
                 covers_dir=covers_dir,
                 now=now,
                 verbose=verbose,
