@@ -122,6 +122,7 @@ The scanner:
 - **Repoints** the database to a duplicate file with a longer basename when the canonical path is missing or shorter (metadata unchanged; no Calibre), and **deletes** the old shorter on-disk copy when it still exists under a scan root
 - Marks books **missing** when their file is absent from a scanned path (metadata kept; hidden from the web UI until the file reappears)
 - Reads metadata with `ebook-meta` only for new or changed files
+- Stores descriptions as plain text (HTML tags stripped, entities decoded)
 - Saves cover images to `data/covers/NN/{id}.jpg` (sharded by `book_id % 100`)
 - Upserts records into `data/library.db`
 
@@ -172,11 +173,10 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 ### Web UI features
 
 - **Full-text search** (FTS5) by title, author, publisher, and genre — fast on large libraries; no rescan needed
-- **Search** filters — each word in a field must match (prefix/token search via FTS; falls back to substring `LIKE` if needed)
+- **Search** — filters apply when you press Enter in a field or click **Apply**
 - **Pagination** with configurable page size (10, 25, 50, 100, or 200); **Previous/Next** use keyset cursors (`after_id` / `before_id`) for fast browsing at any depth; **Jump to page** still uses offset when you need a specific page number
 - **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
 - **Sort direction** (↑/↓) to reverse order
-- **Debounced search** — filters apply automatically ~2s after you stop typing
 - **Keyboard shortcuts** — press <kbd>?</kbd> for help (`/` focus search, `Esc` clear, `←`/`→` change page on the library; `←`/`→` move between books on detail pages)
 - **Touch navigation** — swipe left/right on library and detail pages (same as arrow keys)
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
@@ -258,7 +258,7 @@ Use `-p` / `--path` to override scan roots, `-d` for the database path. `--force
 
 **Filenames:** `run` renames unsafe characters and very short basenames (stem &lt; 10 characters) to `{title} - {authors}-({publisher}).epub`, then updates `file_path` and `file_name` in the database. `audit` lists planned renames under **Filename fixes**.
 
-**Descriptions:** `--strip-description-html` converts stored book descriptions to plain text: HTML tags are removed, HTML entities are decoded (`&amp;`, `&#39;`, etc.), and whitespace is normalized. Empty results become `NULL`. Updates commit per row so interrupted runs keep progress. The web UI always escapes descriptions when rendering; this flag cleans the database copy (useful after imports from Calibre or online metadata). Dry-run first: `run --strip-description-html`, then `run --execute --strip-description-html`.
+**Descriptions:** New scans already store plain-text descriptions. `--strip-description-html` converts existing stored HTML descriptions to plain text: HTML tags are removed, HTML entities are decoded (`&amp;`, `&#39;`, etc.), and whitespace is normalized. Empty results become `NULL`. Updates commit per row so interrupted runs keep progress. The web UI always escapes descriptions when rendering; this flag cleans older database rows (useful after imports from Calibre or online metadata). Dry-run first: `run --strip-description-html`, then `run --execute --strip-description-html`.
 
 **EPUB validation:** `--validate-epubs` checks ZIP integrity (CRC/decompression), `container.xml`, OPF manifest/spine, and parses spine HTML/XHTML. Validates every indexed on-disk book plus unindexed `.epub` files under scan roots. Indexed books that pass are recorded in the database (`epub_validated` / `epub_deep_validated`, migration 009) and skipped on later runs until the file changes. Progress is printed every 1000 valid files. With `run --execute`, invalid files are first run through `convert_epub2.py` and re-validated; only files that still fail are deleted from disk and indexed rows (plus cover images) are purged. Dry-run lists them under **Invalid EPUBs** without converting. Add `--validate-epubs-deep` to also require Calibre `ebook-meta` to open each file (slower; needs Calibre on `PATH`).
 

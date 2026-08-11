@@ -602,10 +602,10 @@ def render_library(
       <form id="library-filter-form" class="filter-form filter-form--compact" method="get" action="{esc(cgi_script('index.py'))}" data-clear-url="{clear_url}">
         <input type="hidden" name="sort_dir" value="{esc(sort_dir)}">
         <div class="filter-form__main">
-          <input class="filter-input" type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Title" aria-label="Filter by title" autocomplete="off" data-filter-search>
-          <input class="filter-input" type="search" name="author" value="{esc(selected_author)}" placeholder="Author" aria-label="Filter by author" autocomplete="off" data-filter-search>
-          <input class="filter-input" type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Publisher" aria-label="Filter by publisher" autocomplete="off" data-filter-search>
-          <input class="filter-input" type="search" name="genre" value="{esc(selected_genre)}" placeholder="Genre" aria-label="Filter by genre" autocomplete="off" data-filter-search>
+          <input class="filter-input" type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Title" aria-label="Filter by title" autocomplete="off">
+          <input class="filter-input" type="search" name="author" value="{esc(selected_author)}" placeholder="Author" aria-label="Filter by author" autocomplete="off">
+          <input class="filter-input" type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Publisher" aria-label="Filter by publisher" autocomplete="off">
+          <input class="filter-input" type="search" name="genre" value="{esc(selected_genre)}" placeholder="Genre" aria-label="Filter by genre" autocomplete="off">
           <select class="filter-input" name="language" aria-label="Filter by language" data-filter-auto>
 {_select_options(options.languages, selected_language, "Language", max_label=10)}
           </select>

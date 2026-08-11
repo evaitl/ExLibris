@@ -1,6 +1,4 @@
 (function () {
-  const DEBOUNCE_MS = 2000;
-
   function isTyping() {
     const el = document.activeElement;
     if (!el) {
@@ -26,15 +24,6 @@
   }
 
   if (filterForm) {
-    let debounceTimer = null;
-
-    filterForm.querySelectorAll("[data-filter-search]").forEach((input) => {
-      input.addEventListener("input", () => {
-        window.clearTimeout(debounceTimer);
-        debounceTimer = window.setTimeout(submitFilterForm, DEBOUNCE_MS);
-      });
-    });
-
     filterForm.querySelectorAll("[data-filter-auto]").forEach((control) => {
       control.addEventListener("change", submitFilterForm);
     });
