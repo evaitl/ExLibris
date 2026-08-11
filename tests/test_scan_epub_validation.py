@@ -154,6 +154,40 @@ def test_scan_single_file_indexes_valid_epub_and_marks_validated() -> None:
             assert book.epub_deep_validated is False
 
 
+def test_scan_single_file_strips_html_from_description() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        good = root / "good.epub"
+        _write_minimal_epub(good)
+        meta = EbookMeta(
+            title="Sample",
+            authors="Author",
+            format="epub",
+            description="<p>Hello <b>world</b> &amp; friends.</p>",
+        )
+
+        engine = get_engine(root / "library.db")
+        SessionLocal = init_db(engine)
+        now = datetime.now(timezone.utc)
+
+        with SessionLocal() as session:
+            with (
+                patch("exlibris.scanner.read_metadata", return_value=meta),
+                patch("exlibris.scanner.extract_cover", return_value=None),
+            ):
+                result = scan_single_file(
+                    session,
+                    good,
+                    now=now,
+                    scan_roots=[root],
+                )
+
+            book = session.scalar(select(Book))
+            assert result.status == "indexed"
+            assert book is not None
+            assert book.description == "Hello world & friends."
+
+
 def test_scan_paths_deletes_invalid_epub_and_does_not_reprocess() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

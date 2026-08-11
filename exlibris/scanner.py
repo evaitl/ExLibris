@@ -20,6 +20,7 @@ from exlibris.cover_paths import cover_dest_base, remove_cover_files
 from exlibris.database import find_book_by_content_hash, upsert_book
 from exlibris.ebook_meta import EbookMetaError, extract_cover, read_metadata
 from exlibris.ebook_convert import convert_epub2_in_place
+from exlibris.description_text import plain_text_description
 from exlibris.epub_validate import validate_epub_structure
 from exlibris.file_hash import sha1_file
 from exlibris.library_cache import refresh_library_stats
@@ -385,7 +386,7 @@ def scan_single_file(
             "published_date": meta.published_date,
             "isbn": meta.isbn,
             "language": meta.language,
-            "description": meta.description,
+            "description": plain_text_description(meta.description),
             "series": meta.series,
             "series_index": meta.series_index,
             "tags": meta.tags,
