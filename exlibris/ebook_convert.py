@@ -62,6 +62,10 @@ def convert_epub_to_version2(
         )
     if not dest.is_file() or dest.stat().st_size == 0:
         raise EbookConvertError("ebook-convert produced no output file")
+    try:
+        _load_convert_epub2().mark_cover_for_thumbnailers(dest)
+    except (OSError, FileNotFoundError):
+        pass
 
 
 _convert_epub2_module = None

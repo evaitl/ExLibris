@@ -21,8 +21,11 @@ def test_convert_epub_to_version2_invokes_calibre() -> None:
         completed = MagicMock(returncode=0, stdout="", stderr="")
         with patch("exlibris.ebook_convert.subprocess.run", return_value=completed) as run:
             with patch("exlibris.ebook_convert.find_ebook_convert", return_value="/usr/bin/ebook-convert"):
-                dest.write_bytes(b"converted")
-                convert_epub_to_version2(source, dest)
+                with patch("exlibris.ebook_convert._load_convert_epub2") as load:
+                    load.return_value.mark_cover_for_thumbnailers.return_value = True
+                    dest.write_bytes(b"converted")
+                    convert_epub_to_version2(source, dest)
+        load.return_value.mark_cover_for_thumbnailers.assert_called_once_with(dest)
 
         run.assert_called_once()
         args = run.call_args.args[0]
