@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import zipfile
 from pathlib import Path
@@ -149,3 +150,152 @@ def test_convert_in_place_marks_cover_before_replace(tmp_path: Path) -> None:
     opf = _read_opf(epub)
     assert 'content="cover-img"' in opf
     assert 'properties="cover-image"' in opf
+
+
+BOOK_UUID = "12345678-1234-1234-1234-123456789abc"
+BOOK_ID = f"urn:uuid:{BOOK_UUID}"
+PLAIN_FONT = b"\x00\x01\x00\x00" + bytes(range(256)) * 5
+IDPF_FONT_ALGO = "http://www.idpf.org/2008/embedding"
+AES_ALGO = "http://www.w3.org/2001/04/xmlenc#aes256-cbc"
+
+
+def _xor_prefix(data: bytes, key: bytes, length: int) -> bytes:
+    buf = bytearray(data)
+    for index in range(min(length, len(buf))):
+        buf[index] ^= key[index % len(key)]
+    return bytes(buf)
+
+
+def _encryption_xml(algorithm: str, uri: str) -> str:
+    return f"""<?xml version="1.0"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+            xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData>
+    <enc:EncryptionMethod Algorithm="{algorithm}"/>
+    <enc:CipherData>
+      <enc:CipherReference URI="{uri}"/>
+    </enc:CipherData>
+  </enc:EncryptedData>
+</encryption>
+"""
+
+
+def _opf_with_font() -> str:
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">{BOOK_ID}</dc:identifier>
+    <dc:title>Test</dc:title>
+  </metadata>
+  <manifest>
+    <item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="font" href="font.ttf" media-type="application/x-font-ttf"/>
+  </manifest>
+  <spine>
+    <itemref idref="c1"/>
+  </spine>
+</package>
+"""
+
+
+def _write_epub_with_encryption(
+    path: Path,
+    *,
+    algorithm: str,
+    uri: str,
+    font: bytes | None = None,
+    chapter: str = CHAPTER,
+) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", CONTAINER)
+        archive.writestr("META-INF/encryption.xml", _encryption_xml(algorithm, uri))
+        archive.writestr("OEBPS/content.opf", _opf_with_font())
+        archive.writestr("OEBPS/chapter.xhtml", chapter)
+        archive.writestr("OEBPS/font.ttf", font if font is not None else PLAIN_FONT)
+
+
+def test_write_calibre_readable_epub_deobfuscates_idpf_font(tmp_path: Path) -> None:
+    key = hashlib.sha1(BOOK_ID.encode("utf-8")).digest()
+    obfuscated = _xor_prefix(PLAIN_FONT, key, 1040)
+    assert obfuscated != PLAIN_FONT
+
+    src = tmp_path / "obfuscated.epub"
+    dest = tmp_path / "clean.epub"
+    _write_epub_with_encryption(
+        src,
+        algorithm=IDPF_FONT_ALGO,
+        uri="OEBPS/font.ttf",
+        font=obfuscated,
+    )
+
+    assert convert_epub2._write_calibre_readable_epub(src, dest)
+    with zipfile.ZipFile(dest) as archive:
+        assert "META-INF/encryption.xml" not in archive.namelist()
+        assert archive.read("OEBPS/font.ttf") == PLAIN_FONT
+        assert b"Hello" in archive.read("OEBPS/chapter.xhtml")
+
+
+def test_write_calibre_readable_epub_strips_stale_aes_on_plaintext(tmp_path: Path) -> None:
+    src = tmp_path / "stale.epub"
+    dest = tmp_path / "clean.epub"
+    _write_epub_with_encryption(
+        src,
+        algorithm=AES_ALGO,
+        uri="OEBPS/chapter.xhtml",
+        font=PLAIN_FONT,
+    )
+
+    assert convert_epub2._write_calibre_readable_epub(src, dest)
+    with zipfile.ZipFile(dest) as archive:
+        assert "META-INF/encryption.xml" not in archive.namelist()
+        assert b"Hello" in archive.read("OEBPS/chapter.xhtml")
+
+
+def test_write_calibre_readable_epub_leaves_real_drm(tmp_path: Path) -> None:
+    src = tmp_path / "drm.epub"
+    dest = tmp_path / "clean.epub"
+    _write_epub_with_encryption(
+        src,
+        algorithm=AES_ALGO,
+        uri="OEBPS/chapter.xhtml",
+        chapter="not actually html" + "\x00\xff" * 200,
+    )
+
+    assert not convert_epub2._write_calibre_readable_epub(src, dest)
+
+
+def test_convert_in_place_strips_encryption_before_calibre(tmp_path: Path) -> None:
+    epub = tmp_path / "book.epub"
+    _write_epub_with_encryption(
+        epub,
+        algorithm=AES_ALGO,
+        uri="OEBPS/chapter.xhtml",
+    )
+    converted_sources: list[str] = []
+
+    def fake_run(args, **_kwargs):
+        if "--get-cover" in args:
+            Path(args[args.index("--get-cover") + 1]).write_bytes(b"cover")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        source = Path(args[1])
+        converted_sources.append(str(source))
+        with zipfile.ZipFile(source) as archive:
+            assert "META-INF/encryption.xml" not in archive.namelist()
+        dest = Path(args[2])
+        dest.write_bytes(source.read_bytes())
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.object(convert_epub2.subprocess, "run", side_effect=fake_run):
+        assert convert_epub2.convert_in_place(
+            epub,
+            convert_cmd="/usr/bin/ebook-convert",
+            meta_cmd="/usr/bin/ebook-meta",
+            dry_run=False,
+            verbose=False,
+        )
+
+    assert converted_sources
+    with zipfile.ZipFile(epub) as archive:
+        assert "META-INF/encryption.xml" not in archive.namelist()
+

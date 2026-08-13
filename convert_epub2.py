@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -32,6 +34,20 @@ IMAGE_MEDIA_TYPES = frozenset(
     }
 )
 COVER_ITEM_IDS = frozenset({"cover", "cover-image", "coverimage", "cover_image"})
+ENCRYPTION_MEMBER = "META-INF/encryption.xml"
+ADOBE_FONT_OBFUSCATION = "http://ns.adobe.com/pdf/enc#RC"
+IDPF_FONT_OBFUSCATION = "http://www.idpf.org/2008/embedding"
+FONT_OBFUSCATION_ALGORITHMS = frozenset(
+    {ADOBE_FONT_OBFUSCATION, IDPF_FONT_OBFUSCATION}
+)
+FONT_MAGIC = (
+    b"\x00\x01\x00\x00",
+    b"OTTO",
+    b"true",
+    b"typ1",
+    b"wOFF",
+    b"wOF2",
+)
 
 
 def find_tool(name: str, explicit: str | None) -> str:
@@ -354,6 +370,255 @@ def mark_cover_for_thumbnailers(epub: Path) -> bool:
     return True
 
 
+def _zip_member_lookup(archive: zipfile.ZipFile) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for name in archive.namelist():
+        normalized = _zip_name(name)
+        lookup.setdefault(normalized, name)
+        lookup.setdefault(normalized.lower(), name)
+    return lookup
+
+
+def _read_member(archive: zipfile.ZipFile, lookup: dict[str, str], path: str) -> bytes | None:
+    actual = lookup.get(path) or lookup.get(path.lower())
+    if actual is None:
+        return None
+    try:
+        return archive.read(actual)
+    except KeyError:
+        return None
+
+
+def _has_encryption_xml(epub: Path) -> bool:
+    try:
+        with zipfile.ZipFile(epub, "r") as archive:
+            lookup = _zip_member_lookup(archive)
+            return _read_member(archive, lookup, ENCRYPTION_MEMBER) is not None
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _looks_like_font(data: bytes) -> bool:
+    return any(data.startswith(magic) for magic in FONT_MAGIC)
+
+
+def _looks_like_markup(data: bytes) -> bool:
+    if not data or not data.lstrip().startswith(b"<"):
+        return False
+    try:
+        ET.fromstring(data)
+        return True
+    except ET.ParseError:
+        sample = data[:4096].lower()
+        return b"<html" in sample or b"<body" in sample or sample.lstrip().startswith(b"<?xml")
+
+
+def _spine_content_is_readable(archive: zipfile.ZipFile) -> bool:
+    lookup = _zip_member_lookup(archive)
+    opf_path = _opf_path(archive)
+    if not opf_path:
+        return False
+    opf_bytes = _read_member(archive, lookup, opf_path)
+    if not opf_bytes:
+        return False
+    try:
+        root = ET.fromstring(opf_bytes)
+    except ET.ParseError:
+        return False
+    items = {
+        item.get("id"): item
+        for item in _manifest_items(root)
+        if item.get("id")
+    }
+    for child in root:
+        if _local_tag(child.tag) != "spine":
+            continue
+        for itemref in child:
+            if _local_tag(itemref.tag) != "itemref":
+                continue
+            item = items.get(itemref.get("idref"))
+            if item is None:
+                continue
+            href = item.get("href")
+            media_type = (item.get("media-type") or "").lower()
+            if not href:
+                continue
+            member = _resolve_href(opf_path, href)
+            data = _read_member(archive, lookup, member)
+            if not data:
+                continue
+            if media_type in {
+                "application/xhtml+xml",
+                "text/html",
+                "application/html+xml",
+            } or member.lower().endswith((".xhtml", ".html", ".htm")):
+                if _looks_like_markup(data):
+                    return True
+    return False
+
+
+def _identifier_texts(root: ET.Element) -> list[str]:
+    metadata = _metadata(root)
+    if metadata is None:
+        return []
+    texts: list[str] = []
+    for element in metadata:
+        if _local_tag(element.tag) != "identifier":
+            continue
+        text = (element.text or "").strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _package_unique_identifier(root: ET.Element) -> str | None:
+    uid = root.get("unique-identifier")
+    metadata = _metadata(root)
+    if metadata is not None and uid:
+        for element in metadata:
+            if _local_tag(element.tag) != "identifier":
+                continue
+            if element.get("id") == uid:
+                text = (element.text or "").strip()
+                if text:
+                    return text
+    texts = _identifier_texts(root)
+    return texts[0] if texts else None
+
+
+def _idpf_font_key(identifier: str | None) -> bytes | None:
+    if not identifier:
+        return None
+    compact = re.sub(r"[ \t\r\n]", "", identifier)
+    if not compact:
+        return None
+    return hashlib.sha1(compact.encode("utf-8")).digest()
+
+
+def _adobe_font_key(identifiers: list[str]) -> bytes | None:
+    for text in identifiers:
+        raw = text.strip()
+        if raw.lower().startswith("urn:uuid:"):
+            raw = raw.rsplit(":", 1)[-1]
+        try:
+            return uuid.UUID(raw).bytes
+        except ValueError:
+            continue
+    return None
+
+
+def _xor_prefix(data: bytes, key: bytes, length: int) -> bytes:
+    buf = bytearray(data)
+    limit = min(length, len(buf))
+    key_len = len(key)
+    for index in range(limit):
+        buf[index] ^= key[index % key_len]
+    return bytes(buf)
+
+
+def _deobfuscate_font(data: bytes, algorithm: str, *, idpf_key: bytes | None, adobe_key: bytes | None) -> bytes:
+    if _looks_like_font(data):
+        return data
+    if algorithm == IDPF_FONT_OBFUSCATION and idpf_key:
+        candidate = _xor_prefix(data, idpf_key, 1040)
+        if _looks_like_font(candidate):
+            return candidate
+    if algorithm == ADOBE_FONT_OBFUSCATION and adobe_key:
+        candidate = _xor_prefix(data, adobe_key, 1024)
+        if _looks_like_font(candidate):
+            return candidate
+    return data
+
+
+def _encryption_entries(xml_bytes: bytes) -> list[tuple[str, str]]:
+    root = ET.fromstring(xml_bytes)
+    entries: list[tuple[str, str]] = []
+    for element in root.iter():
+        if _local_tag(element.tag) != "EncryptedData":
+            continue
+        algorithm = ""
+        uri = ""
+        for child in element.iter():
+            local = _local_tag(child.tag)
+            if local == "EncryptionMethod":
+                algorithm = child.get("Algorithm") or ""
+            elif local == "CipherReference":
+                uri = unquote(child.get("URI") or "").strip()
+        if uri:
+            entries.append((algorithm, uri))
+    return entries
+
+
+def _write_calibre_readable_epub(source: Path, dest: Path) -> bool:
+    """Copy an EPUB without stale encryption.xml so Calibre will convert it.
+
+    Calibre treats any unrecognized ``META-INF/encryption.xml`` as DRM, including
+    IDPF/Adobe font obfuscation it fails to unwrap and leftover encryption
+    entries on plaintext files. Readers like xreader still open those books.
+    Real content DRM (unreadable spine HTML) is left untouched.
+    """
+    try:
+        with zipfile.ZipFile(source, "r") as src:
+            lookup = _zip_member_lookup(src)
+            enc_bytes = _read_member(src, lookup, ENCRYPTION_MEMBER)
+            if enc_bytes is None:
+                return False
+            if not _spine_content_is_readable(src):
+                return False
+
+            replacements: dict[str, bytes] = {}
+            opf_path = _opf_path(src)
+            idpf_key = adobe_key = None
+            if opf_path:
+                opf_bytes = _read_member(src, lookup, opf_path)
+                if opf_bytes:
+                    try:
+                        opf_root = ET.fromstring(opf_bytes)
+                    except ET.ParseError:
+                        opf_root = None
+                    if opf_root is not None:
+                        identifiers = _identifier_texts(opf_root)
+                        unique = _package_unique_identifier(opf_root)
+                        idpf_key = _idpf_font_key(unique)
+                        adobe_key = _adobe_font_key(
+                            [unique] + identifiers if unique else identifiers
+                        )
+            try:
+                entries = _encryption_entries(enc_bytes)
+            except ET.ParseError:
+                entries = []
+            for algorithm, uri in entries:
+                if algorithm not in FONT_OBFUSCATION_ALGORITHMS:
+                    continue
+                member = lookup.get(uri) or lookup.get(uri.lower())
+                if member is None:
+                    continue
+                data = src.read(member)
+                replacements[member] = _deobfuscate_font(
+                    data, algorithm, idpf_key=idpf_key, adobe_key=adobe_key
+                )
+
+            skip = {ENCRYPTION_MEMBER.lower(), "meta-inf/rights.xml"}
+            with zipfile.ZipFile(dest, "w") as dst:
+                names = src.namelist()
+                if "mimetype" in names:
+                    dst.writestr(
+                        "mimetype",
+                        src.read("mimetype"),
+                        compress_type=zipfile.ZIP_STORED,
+                    )
+                for info in src.infolist():
+                    if info.filename == "mimetype":
+                        continue
+                    if _zip_name(info.filename).lower() in skip:
+                        continue
+                    payload = replacements.get(info.filename, src.read(info.filename))
+                    dst.writestr(info, payload)
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
+
+
 def convert_in_place(
     epub: Path,
     *,
@@ -368,6 +633,7 @@ def convert_in_place(
 
     temp_epub: Path | None = None
     temp_cover: Path | None = None
+    cleaned_source: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             suffix=".epub",
@@ -379,14 +645,30 @@ def convert_in_place(
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as cover_handle:
             temp_cover = Path(cover_handle.name)
 
+        source_epub = epub
+        if _has_encryption_xml(epub):
+            with tempfile.NamedTemporaryFile(
+                suffix=".epub",
+                dir=epub.parent,
+                delete=False,
+            ) as cleaned_handle:
+                cleaned_source = Path(cleaned_handle.name)
+            if _write_calibre_readable_epub(epub, cleaned_source):
+                source_epub = cleaned_source
+                if verbose:
+                    print(f"stripped non-DRM encryption.xml: {epub}", file=sys.stderr)
+            else:
+                cleaned_source.unlink(missing_ok=True)
+                cleaned_source = None
+
         options = list(EPUB2_OPTIONS)
-        if extract_cover(epub, temp_cover, ebook_meta_cmd=meta_cmd):
+        if extract_cover(source_epub, temp_cover, ebook_meta_cmd=meta_cmd):
             options.extend(["--cover", str(temp_cover)])
         elif verbose:
             print(f"no cover extracted: {epub}", file=sys.stderr)
 
         result = subprocess.run(
-            [convert_cmd, str(epub), str(temp_epub), *options],
+            [convert_cmd, str(source_epub), str(temp_epub), *options],
             capture_output=True,
             text=True,
             check=False,
@@ -411,7 +693,7 @@ def convert_in_place(
         print(f"failed: {epub}: {exc}", file=sys.stderr)
         return False
     finally:
-        for path in (temp_epub, temp_cover):
+        for path in (temp_epub, temp_cover, cleaned_source):
             if path is not None and path.is_file():
                 try:
                     path.unlink()
