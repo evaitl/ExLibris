@@ -232,11 +232,26 @@ def _find_cover_item(
     return None
 
 
-def _ensure_cover_meta(opf_text: str, item_id: str) -> str:
-    meta_re = re.compile(
-        r'(<meta\b[^>]*\bname=["\']cover["\'][^>]*)(/?>)',
+def _repair_broken_cover_item(opf_text: str) -> str:
+    """Fix ``<item ..."/ properties="cover-image">`` from the old rewriter."""
+    return re.sub(
+        r'(<item\b[^>]*?)/\s+properties="cover-image">',
+        r'\1 properties="cover-image"/>',
+        opf_text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _open_tag_re(tag: str, id_attr: str, id_value: str) -> re.Pattern[str]:
+    """Match a start or self-closing tag without swallowing the final '/'."""
+    return re.compile(
+        rf'(<{tag}\b(?=[^>]*\b{id_attr}=["\']{re.escape(id_value)}["\'])[^>]*?)\s*(/?>)',
         re.IGNORECASE,
     )
+
+
+def _ensure_cover_meta(opf_text: str, item_id: str) -> str:
+    meta_re = _open_tag_re("meta", "name", "cover")
     match = meta_re.search(opf_text)
     if match:
         tag, ending = match.group(1), match.group(2)
@@ -261,10 +276,7 @@ def _ensure_cover_meta(opf_text: str, item_id: str) -> str:
 
 
 def _ensure_cover_image_property(opf_text: str, item_id: str) -> str:
-    item_re = re.compile(
-        rf'(<item\b[^>]*\bid=["\']{re.escape(item_id)}["\'][^>]*)(/?>)',
-        re.IGNORECASE,
-    )
+    item_re = _open_tag_re("item", "id", item_id)
     match = item_re.search(opf_text)
     if match is None:
         return opf_text
@@ -285,6 +297,20 @@ def _ensure_cover_image_property(opf_text: str, item_id: str) -> str:
     return opf_text[: match.start()] + tag + ending + opf_text[match.end() :]
 
 
+def _write_zip_member(
+    dst: zipfile.ZipFile,
+    name: str,
+    payload: bytes,
+    *,
+    stored: bool = False,
+    date_time: tuple[int, ...] | None = None,
+) -> None:
+    info = zipfile.ZipInfo(name, date_time=date_time or (2020, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED
+    info.extra = b""
+    dst.writestr(info, payload)
+
+
 def _replace_zip_member(epub: Path, member: str, data: bytes) -> None:
     handle, tmp_name = tempfile.mkstemp(suffix=".epub", dir=str(epub.parent))
     os.close(handle)
@@ -292,17 +318,24 @@ def _replace_zip_member(epub: Path, member: str, data: bytes) -> None:
     try:
         with zipfile.ZipFile(epub, "r") as src, zipfile.ZipFile(tmp, "w") as dst:
             names = src.namelist()
-            if "mimetype" in names:
-                dst.writestr(
-                    "mimetype",
-                    src.read("mimetype"),
-                    compress_type=zipfile.ZIP_STORED,
-                )
+            mime = src.read("mimetype") if "mimetype" in names else b"application/epub+zip"
+            _write_zip_member(dst, "mimetype", mime, stored=True)
+            written = {"mimetype"}
             for info in src.infolist():
-                if info.filename == "mimetype":
+                name = info.filename
+                if name in written or name.endswith("/"):
                     continue
-                payload = data if info.filename == member else src.read(info.filename)
-                dst.writestr(info, payload)
+                payload = data if name == member else src.read(name)
+                _write_zip_member(
+                    dst,
+                    name,
+                    payload,
+                    stored=False,
+                    date_time=info.date_time,
+                )
+                written.add(name)
+            if member not in written:
+                _write_zip_member(dst, member, data)
         os.replace(tmp, epub)
         tmp = None
     finally:
@@ -329,8 +362,9 @@ def mark_cover_for_thumbnailers(epub: Path) -> bool:
                 opf_bytes = archive.read(opf_path)
             except KeyError:
                 return False
+            opf_text = _repair_broken_cover_item(opf_bytes.decode("utf-8"))
             try:
-                root = ET.fromstring(opf_bytes)
+                root = ET.fromstring(opf_text)
             except ET.ParseError:
                 return False
             cover_item = _find_cover_item(archive, root, opf_path)
@@ -339,7 +373,6 @@ def mark_cover_for_thumbnailers(epub: Path) -> bool:
             item_id = cover_item.get("id")
             if not item_id:
                 return False
-            opf_text = opf_bytes.decode("utf-8")
     except OSError:
         return False
 

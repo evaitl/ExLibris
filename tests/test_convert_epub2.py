@@ -86,6 +86,20 @@ def test_convert_epub2_keeps_shebang() -> None:
     assert first == "#!/usr/bin/env python3"
 
 
+def _assert_valid_cover_item(opf: str, item_id: str = "cover-img") -> None:
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(opf)
+    item = None
+    for el in root.iter():
+        if el.tag.endswith("item") and el.get("id") == item_id:
+            item = el
+            break
+    assert item is not None
+    assert "cover-image" in (item.get("properties") or "").split()
+    assert "/ properties=" not in opf
+
+
 def test_mark_cover_adds_meta_and_cover_image_property(tmp_path: Path) -> None:
     epub = tmp_path / "book.epub"
     _write_epub(epub, _opf(cover_meta=None, cover_property=False))
@@ -95,7 +109,11 @@ def test_mark_cover_adds_meta_and_cover_image_property(tmp_path: Path) -> None:
     opf = _read_opf(epub)
     assert 'name="cover"' in opf
     assert 'content="cover-img"' in opf
-    assert 'properties="cover-image"' in opf
+    _assert_valid_cover_item(opf)
+    with zipfile.ZipFile(epub) as archive:
+        assert archive.namelist()[0] == "mimetype"
+        assert archive.read("mimetype") == b"application/epub+zip"
+        assert archive.getinfo("mimetype").compress_type == zipfile.ZIP_STORED
 
 
 def test_mark_cover_follows_titlepage_meta(tmp_path: Path) -> None:
@@ -106,7 +124,36 @@ def test_mark_cover_follows_titlepage_meta(tmp_path: Path) -> None:
 
     opf = _read_opf(epub)
     assert 'content="cover-img"' in opf
-    assert 'properties="cover-image"' in opf
+    _assert_valid_cover_item(opf)
+
+
+def test_repair_broken_cover_item_from_old_rewriter() -> None:
+    broken = (
+        '<item id="cover" href="cover.jpeg" media-type="image/jpeg"/'
+        ' properties="cover-image">'
+    )
+    fixed = convert_epub2._repair_broken_cover_item(broken)
+    assert '/ properties=' not in fixed
+    assert fixed.endswith('properties="cover-image"/>')
+
+
+def test_mark_cover_keeps_self_closing_item_well_formed() -> None:
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="2.0">\n'
+        "  <metadata>\n"
+        '    <meta name="cover" content="cover"/>\n'
+        "  </metadata>\n"
+        "  <manifest>\n"
+        '    <item id="cover" href="cover.jpeg" media-type="image/jpeg"/>\n'
+        "  </manifest>\n"
+        "</package>\n"
+    )
+    patched = convert_epub2._ensure_cover_image_property(opf, "cover")
+    assert "/ properties=" not in patched
+    assert 'media-type="image/jpeg" properties="cover-image"/>' in patched
+    import xml.etree.ElementTree as ET
+
+    ET.fromstring(patched)
 
 
 def test_mark_cover_is_idempotent(tmp_path: Path) -> None:
@@ -148,4 +195,6 @@ def test_convert_in_place_marks_cover_before_replace(tmp_path: Path) -> None:
 
     opf = _read_opf(epub)
     assert 'content="cover-img"' in opf
-    assert 'properties="cover-image"' in opf
+    _assert_valid_cover_item(opf)
+    with zipfile.ZipFile(epub) as archive:
+        assert archive.namelist()[0] == "mimetype"
