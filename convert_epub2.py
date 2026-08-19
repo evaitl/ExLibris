@@ -370,7 +370,7 @@ def mark_cover_for_thumbnailers(epub: Path) -> bool:
     if not zipfile.is_zipfile(epub):
         return False
     try:
-        with zipfile.ZipFile(epub, "r") as archive:
+        with _open_epub_zip(epub) as archive:
             opf_path = _opf_path(archive)
             if not opf_path:
                 return False
@@ -403,6 +403,21 @@ def mark_cover_for_thumbnailers(epub: Path) -> bool:
     return True
 
 
+def _open_epub_zip(path: Path) -> zipfile.ZipFile:
+    """Open an EPUB ZIP, tolerating legacy non-UTF-8 member names."""
+    last_error: Exception | None = None
+    for encoding in ("utf-8", "cp437", "latin-1"):
+        try:
+            return zipfile.ZipFile(path, metadata_encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+        except UnicodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return zipfile.ZipFile(path, metadata_encoding="cp437")
+
+
 def _zip_member_lookup(archive: zipfile.ZipFile) -> dict[str, str]:
     lookup: dict[str, str] = {}
     for name in archive.namelist():
@@ -424,7 +439,7 @@ def _read_member(archive: zipfile.ZipFile, lookup: dict[str, str], path: str) ->
 
 def _has_encryption_xml(epub: Path) -> bool:
     try:
-        with zipfile.ZipFile(epub, "r") as archive:
+        with _open_epub_zip(epub) as archive:
             lookup = _zip_member_lookup(archive)
             return _read_member(archive, lookup, ENCRYPTION_MEMBER) is not None
     except (OSError, zipfile.BadZipFile):
@@ -435,15 +450,37 @@ def _looks_like_font(data: bytes) -> bool:
     return any(data.startswith(magic) for magic in FONT_MAGIC)
 
 
+def _looks_like_html_document(data: bytes) -> bool:
+    if not data:
+        return False
+    raw = data
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            text = data.decode("utf-16")
+        except UnicodeDecodeError:
+            return False
+        sample = text[:8192].lower()
+        return "<html" in sample or "<body" in sample or "<!doctype html" in sample
+    sample = raw[:8192].lower()
+    return b"<html" in sample or b"<body" in sample or b"<!doctype html" in sample
+
+
 def _looks_like_markup(data: bytes) -> bool:
-    if not data or not data.lstrip().startswith(b"<"):
+    if _looks_like_html_document(data):
+        return True
+    if not data:
+        return False
+    raw = data[3:] if data.startswith(b"\xef\xbb\xbf") else data
+    stripped = raw.lstrip()
+    if not stripped.startswith(b"<"):
         return False
     try:
-        ET.fromstring(data)
+        ET.fromstring(stripped)
         return True
     except ET.ParseError:
-        sample = data[:4096].lower()
-        return b"<html" in sample or b"<body" in sample or sample.lstrip().startswith(b"<?xml")
+        return stripped.lower().startswith(b"<?xml")
 
 
 def _spine_content_is_readable(archive: zipfile.ZipFile) -> bool:
@@ -488,6 +525,34 @@ def _spine_content_is_readable(archive: zipfile.ZipFile) -> bool:
                 if _looks_like_markup(data):
                     return True
     return False
+
+
+def _epub_content_is_readable(archive: zipfile.ZipFile) -> bool:
+    if _spine_content_is_readable(archive):
+        return True
+    for name in archive.namelist():
+        lower = name.lower().replace("\\", "/")
+        if lower.endswith(("container.xml", "encryption.xml", "rights.xml", ".opf")):
+            continue
+        try:
+            data = archive.read(name)
+        except KeyError:
+            continue
+        if _looks_like_html_document(data):
+            return True
+    return False
+
+
+def _should_unwrap_encryption(archive: zipfile.ZipFile, enc_bytes: bytes) -> bool:
+    try:
+        entries = _encryption_entries(enc_bytes)
+    except ET.ParseError:
+        entries = []
+    if not entries:
+        return True
+    if all(algorithm in FONT_OBFUSCATION_ALGORITHMS for algorithm, _uri in entries):
+        return True
+    return _epub_content_is_readable(archive)
 
 
 def _identifier_texts(root: ET.Element) -> list[str]:
@@ -591,12 +656,12 @@ def _write_calibre_readable_epub(source: Path, dest: Path) -> bool:
     Real content DRM (unreadable spine HTML) is left untouched.
     """
     try:
-        with zipfile.ZipFile(source, "r") as src:
+        with _open_epub_zip(source) as src:
             lookup = _zip_member_lookup(src)
             enc_bytes = _read_member(src, lookup, ENCRYPTION_MEMBER)
             if enc_bytes is None:
                 return False
-            if not _spine_content_is_readable(src):
+            if not _should_unwrap_encryption(src, enc_bytes):
                 return False
 
             replacements: dict[str, bytes] = {}

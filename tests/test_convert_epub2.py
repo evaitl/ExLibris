@@ -349,3 +349,43 @@ def test_convert_in_place_strips_encryption_before_calibre(tmp_path: Path) -> No
     with zipfile.ZipFile(epub) as archive:
         assert "META-INF/encryption.xml" not in archive.namelist()
         assert archive.namelist()[0] == "mimetype"
+
+
+def test_looks_like_markup_accepts_utf8_bom() -> None:
+    bom_html = b"\xef\xbb\xbf" + CHAPTER.encode("utf-8")
+    assert convert_epub2._looks_like_markup(bom_html)
+
+
+def test_write_calibre_readable_epub_strips_font_only_without_html(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "fonts-only.epub"
+    dest = tmp_path / "clean.epub"
+    _write_epub_with_encryption(
+        src,
+        algorithm=IDPF_FONT_ALGO,
+        uri="OEBPS/font.ttf",
+        chapter="not html " + "\x00\xff" * 50,
+    )
+
+    assert convert_epub2._write_calibre_readable_epub(src, dest)
+    with zipfile.ZipFile(dest) as archive:
+        assert "META-INF/encryption.xml" not in archive.namelist()
+
+
+def test_write_calibre_readable_epub_strips_stale_aes_on_bom_html(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "bom.epub"
+    dest = tmp_path / "clean.epub"
+    _write_epub_with_encryption(
+        src,
+        algorithm=AES_ALGO,
+        uri="OEBPS/chapter.xhtml",
+        chapter="\ufeff" + CHAPTER,
+    )
+
+    assert convert_epub2._write_calibre_readable_epub(src, dest)
+    with zipfile.ZipFile(dest) as archive:
+        assert "META-INF/encryption.xml" not in archive.namelist()
+
