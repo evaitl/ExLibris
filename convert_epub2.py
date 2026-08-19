@@ -14,6 +14,7 @@ import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
@@ -47,6 +48,12 @@ FONT_MAGIC = (
     b"typ1",
     b"wOFF",
     b"wOF2",
+)
+CALIBRE_ZIP_CORRUPTION_MARKERS = (
+    "zlib.error",
+    "invalid stored block lengths",
+    "Error -3 while decompressing",
+    "Bad CRC-32 for file",
 )
 
 
@@ -418,6 +425,53 @@ def _open_epub_zip(path: Path) -> zipfile.ZipFile:
     return zipfile.ZipFile(path, metadata_encoding="cp437")
 
 
+def _check_zip_integrity(archive: zipfile.ZipFile) -> str | None:
+    """Return an error message when a ZIP member fails CRC or decompression."""
+    try:
+        bad_member = archive.testzip()
+    except zlib.error as exc:
+        return f"corrupt ZIP data: {exc}"
+    except (RuntimeError, EOFError) as exc:
+        return f"corrupt ZIP archive: {exc}"
+    if bad_member is not None:
+        return f"corrupt ZIP member: {bad_member}"
+    return None
+
+
+def zip_corruption_error(epub: Path) -> str | None:
+    """Return a short reason when the EPUB ZIP itself is unreadable."""
+    if not epub.is_file():
+        return "file not found"
+    try:
+        if epub.stat().st_size == 0:
+            return "file is empty"
+        if not zipfile.is_zipfile(epub):
+            return "not a ZIP archive"
+        with _open_epub_zip(epub) as archive:
+            return _check_zip_integrity(archive)
+    except (OSError, zipfile.BadZipFile) as exc:
+        return f"corrupt ZIP archive: {exc}"
+
+
+def _calibre_zip_corruption_error(detail: str) -> str | None:
+    """Return a short reason when Calibre failed on ZIP decompression."""
+    if not any(marker in detail for marker in CALIBRE_ZIP_CORRUPTION_MARKERS):
+        return None
+    for line in reversed(detail.splitlines()):
+        stripped = line.strip()
+        if any(marker in stripped for marker in CALIBRE_ZIP_CORRUPTION_MARKERS):
+            return f"corrupt ZIP data: {stripped}"
+    return "corrupt ZIP data"
+
+
+def _delete_corrupt_epub(epub: Path, reason: str) -> None:
+    print(f"deleted (corrupt): {epub}: {reason}", file=sys.stderr)
+    try:
+        epub.unlink()
+    except OSError as exc:
+        print(f"failed to delete: {epub}: {exc}", file=sys.stderr)
+
+
 def _zip_member_lookup(archive: zipfile.ZipFile) -> dict[str, str]:
     lookup: dict[str, str] = {}
     for name in archive.namelist():
@@ -434,6 +488,8 @@ def _read_member(archive: zipfile.ZipFile, lookup: dict[str, str], path: str) ->
     try:
         return archive.read(actual)
     except KeyError:
+        return None
+    except zlib.error:
         return None
 
 
@@ -536,7 +592,7 @@ def _epub_content_is_readable(archive: zipfile.ZipFile) -> bool:
             continue
         try:
             data = archive.read(name)
-        except KeyError:
+        except (KeyError, zlib.error):
             continue
         if _looks_like_html_document(data):
             return True
@@ -712,7 +768,10 @@ def _write_calibre_readable_epub(source: Path, dest: Path) -> bool:
                         continue
                     if _zip_name(name).lower() in skip:
                         continue
-                    payload = replacements.get(name, src.read(name))
+                    try:
+                        payload = replacements.get(name, src.read(name))
+                    except zlib.error:
+                        return False
                     _write_zip_member(
                         dst,
                         name,
@@ -721,7 +780,7 @@ def _write_calibre_readable_epub(source: Path, dest: Path) -> bool:
                         date_time=info.date_time,
                     )
                     written.add(name)
-    except (OSError, zipfile.BadZipFile, KeyError):
+    except (OSError, zipfile.BadZipFile, KeyError, zlib.error):
         return False
     return dest.is_file() and dest.stat().st_size > 0
 
@@ -734,6 +793,14 @@ def convert_in_place(
     dry_run: bool,
     verbose: bool,
 ) -> bool:
+    corruption = zip_corruption_error(epub)
+    if corruption:
+        if dry_run:
+            print(f"would delete (corrupt): {epub}: {corruption}")
+            return False
+        _delete_corrupt_epub(epub, corruption)
+        return False
+
     if dry_run:
         print(f"would convert: {epub}")
         return True
@@ -782,6 +849,10 @@ def convert_in_place(
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
+            calibre_corrupt = _calibre_zip_corruption_error(detail)
+            if calibre_corrupt:
+                _delete_corrupt_epub(epub, calibre_corrupt)
+                return False
             raise RuntimeError(detail or f"exit code {result.returncode}")
 
         if not temp_epub.is_file() or temp_epub.stat().st_size == 0:
@@ -831,12 +902,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No EPUB files under {args.target.expanduser().resolve()}")
         return 0
 
-    ok = failed = 0
+    ok = failed = deleted = 0
     total = len(epubs)
     for index, epub in enumerate(epubs, start=1):
         if not args.verbose and not args.dry_run and total > 1:
             width = len(str(total))
             print(f"[{index:>{width}}/{total}] {epub.name}", flush=True)
+        existed = epub.is_file()
         if convert_in_place(
             epub,
             convert_cmd=convert_cmd,
@@ -845,12 +917,17 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
         ):
             ok += 1
+        elif existed and not epub.is_file():
+            deleted += 1
         else:
             failed += 1
 
     verb = "would convert" if args.dry_run else "converted"
-    print(f"{verb} {ok} EPUB(s); failed {failed} of {total}.")
-    return 1 if failed else 0
+    summary = f"{verb} {ok} EPUB(s); failed {failed} of {total}"
+    if deleted:
+        summary += f"; deleted {deleted} corrupt"
+    print(f"{summary}.")
+    return 1 if failed or deleted else 0
 
 
 if __name__ == "__main__":

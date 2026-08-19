@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import struct
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -388,4 +389,151 @@ def test_write_calibre_readable_epub_strips_stale_aes_on_bom_html(
     assert convert_epub2._write_calibre_readable_epub(src, dest)
     with zipfile.ZipFile(dest) as archive:
         assert "META-INF/encryption.xml" not in archive.namelist()
+
+
+def _corrupt_zip_member(path: Path, member: str) -> None:
+    """Flip bytes in a compressed member so decompression/CRC fails."""
+    data = bytearray(path.read_bytes())
+    with zipfile.ZipFile(path, "r") as archive:
+        offset = archive.getinfo(member).header_offset
+    (
+        _sig,
+        _ver,
+        _flag,
+        _method,
+        _time,
+        _date,
+        _crc,
+        compress_size,
+        _usize,
+        name_len,
+        extra_len,
+    ) = struct.unpack_from("<4sHHHHHIIIHH", data, offset)
+    payload = offset + 30 + name_len + extra_len
+    if compress_size < 8:
+        raise AssertionError(f"{member} compressed payload is too small to corrupt")
+    for index in range(8):
+        data[payload + index] ^= 0xA5
+    path.write_bytes(data)
+
+
+def test_zip_corruption_error_detects_bad_deflate(tmp_path: Path) -> None:
+    epub = tmp_path / "broken.epub"
+    _write_epub(epub, _opf(cover_meta="cover-img", cover_property=True))
+    _corrupt_zip_member(epub, "OEBPS/chapter.xhtml")
+
+    reason = convert_epub2.zip_corruption_error(epub)
+    assert reason is not None
+    assert "corrupt ZIP" in reason
+
+
+def test_convert_in_place_deletes_corrupt_epub(tmp_path: Path, capsys) -> None:
+    epub = tmp_path / "broken.epub"
+    _write_epub(epub, _opf(cover_meta="cover-img", cover_property=True))
+    _corrupt_zip_member(epub, "OEBPS/cover.jpg")
+
+    with patch.object(convert_epub2.subprocess, "run") as run:
+        assert not convert_epub2.convert_in_place(
+            epub,
+            convert_cmd="/usr/bin/ebook-convert",
+            meta_cmd="/usr/bin/ebook-meta",
+            dry_run=False,
+            verbose=False,
+        )
+
+    run.assert_not_called()
+    assert not epub.is_file()
+    err = capsys.readouterr().err
+    assert "deleted (corrupt):" in err
+    assert str(epub) in err
+
+
+def test_convert_in_place_dry_run_does_not_delete_corrupt(tmp_path: Path, capsys) -> None:
+    epub = tmp_path / "broken.epub"
+    _write_epub(epub, _opf(cover_meta="cover-img", cover_property=True))
+    _corrupt_zip_member(epub, "OEBPS/chapter.xhtml")
+
+    assert not convert_epub2.convert_in_place(
+        epub,
+        convert_cmd="/usr/bin/ebook-convert",
+        meta_cmd="/usr/bin/ebook-meta",
+        dry_run=True,
+        verbose=False,
+    )
+    assert epub.is_file()
+    out = capsys.readouterr().out
+    assert "would delete (corrupt):" in out
+
+
+def test_convert_in_place_deletes_non_zip_epub(tmp_path: Path) -> None:
+    epub = tmp_path / "ce.epub"
+    epub.write_text("not an epub", encoding="utf-8")
+
+    with patch.object(convert_epub2.subprocess, "run") as run:
+        assert not convert_epub2.convert_in_place(
+            epub,
+            convert_cmd="/usr/bin/ebook-convert",
+            meta_cmd="/usr/bin/ebook-meta",
+            dry_run=False,
+            verbose=False,
+        )
+
+    run.assert_not_called()
+    assert not epub.is_file()
+
+
+def test_convert_in_place_deletes_when_calibre_reports_zlib(tmp_path: Path) -> None:
+    epub = tmp_path / "book.epub"
+    _write_epub(epub, _opf(cover_meta="cover-img", cover_property=True))
+
+    def fake_run(args, **_kwargs):
+        if "--get-cover" in args:
+            Path(args[args.index("--get-cover") + 1]).write_bytes(b"cover")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "  File epub_input.py, line 1, in extractall\n"
+                "zlib.error: Error -3 while decompressing data: invalid stored block lengths\n"
+            ),
+        )
+
+    with patch.object(convert_epub2.subprocess, "run", side_effect=fake_run):
+        assert not convert_epub2.convert_in_place(
+            epub,
+            convert_cmd="/usr/bin/ebook-convert",
+            meta_cmd="/usr/bin/ebook-meta",
+            dry_run=False,
+            verbose=False,
+        )
+
+    assert not epub.is_file()
+
+
+def test_convert_in_place_keeps_file_on_non_corrupt_calibre_error(tmp_path: Path) -> None:
+    epub = tmp_path / "drm.epub"
+    _write_epub_with_encryption(
+        epub,
+        algorithm=AES_ALGO,
+        uri="OEBPS/chapter.xhtml",
+        chapter="not actually html" + "\x00\xff" * 200,
+    )
+
+    def fake_run(args, **_kwargs):
+        if "--get-cover" in args:
+            return MagicMock(returncode=1, stdout="", stderr="no cover")
+        return MagicMock(returncode=1, stdout="", stderr="This file is locked with DRM")
+
+    with patch.object(convert_epub2.subprocess, "run", side_effect=fake_run):
+        assert not convert_epub2.convert_in_place(
+            epub,
+            convert_cmd="/usr/bin/ebook-convert",
+            meta_cmd="/usr/bin/ebook-meta",
+            dry_run=False,
+            verbose=False,
+        )
+
+    assert epub.is_file()
 
