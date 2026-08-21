@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from exlibris.config import (
+    PROJECT_ROOT,
     load_config_dict,
     load_settings,
     resolve_database_path,
@@ -81,3 +82,15 @@ def test_resolve_database_path_creates_parent() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db = resolve_database_path(Path(tmp) / "nested" / "library.db")
         assert db.parent.is_dir()
+
+
+def test_resolve_database_path_relative_uses_project_root_not_cwd(
+    monkeypatch, tmp_path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    db = resolve_database_path(Path("data/library.db"))
+    assert db.is_absolute()
+    assert db == PROJECT_ROOT / "data" / "library.db"
+    assert elsewhere not in db.parents

@@ -1,7 +1,12 @@
+from __future__ import annotations
+
+import os
+import stat
 from pathlib import Path
 
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from exlibris.models import Book
@@ -10,17 +15,114 @@ SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
 CURRENT_SCHEMA_VERSION = 11
 
 
+class DatabaseNotWritableError(PermissionError):
+    """SQLite cannot write the library database file or its directory."""
+
+
+def is_readonly_sqlite_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return (
+        "readonly" in message
+        or "read-only" in message
+        or "unable to open database file" in message
+    )
+
+
+def _owner_name(uid: int) -> str:
+    try:
+        import pwd
+
+        return pwd.getpwuid(uid).pw_name
+    except (ImportError, KeyError):
+        return str(uid)
+
+
+def _path_access_line(label: str, path: Path) -> str:
+    try:
+        st = path.stat()
+    except OSError as exc:
+        return f"{label}: {path} ({exc})"
+    mode = stat.S_IMODE(st.st_mode)
+    writable = os.access(path, os.W_OK)
+    return (
+        f"{label}: mode {mode:04o}, owner {_owner_name(st.st_uid)}, "
+        f"{'writable' if writable else 'not writable'}"
+    )
+
+
+def database_not_writable_message(db_path: Path) -> str:
+    db_path = Path(db_path).expanduser()
+    try:
+        db_path = db_path.resolve()
+    except OSError:
+        pass
+    lines = [
+        f"Cannot write to the library database at {db_path}.",
+    ]
+    if db_path.exists():
+        lines.append(_path_access_line("  file", db_path))
+    else:
+        lines.append(f"  file: {db_path} (does not exist yet)")
+    lines.append(_path_access_line("  directory", db_path.parent))
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.exists() and not os.access(sidecar, os.W_OK):
+            lines.append(_path_access_line(f"  {sidecar.name}", sidecar))
+    lines.extend(
+        [
+            "",
+            "SQLite needs write access to the database file and its directory",
+            "(it creates library.db-wal / library.db-shm next to the database).",
+            "Deleting data/library.lock does not fix this — that file only",
+            "prevents two maintenance jobs from running at once.",
+            "",
+            "If you moved the repository (especially with sudo, or onto another disk):",
+            f"  sudo chown -R \"$USER:$USER\" {db_path.parent.parent}",
+            f"  chmod u+w {db_path.parent} {db_path}",
+            "Relative paths in config.json (data/library.db) stay valid after a move.",
+            "Recreate the virtualenv so it does not still point at the old tree:",
+            "  python3 -m venv .venv && .venv/bin/pip install -e .",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def ensure_database_writable(db_path: Path) -> Path:
+    """Create the parent directory and refuse to open a read-only database."""
+    db_path = Path(db_path).expanduser()
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path = db_path.resolve()
+    except PermissionError as exc:
+        raise DatabaseNotWritableError(database_not_writable_message(db_path)) from exc
+    if db_path.exists() and not os.access(db_path, os.W_OK):
+        raise DatabaseNotWritableError(database_not_writable_message(db_path))
+    if not os.access(db_path.parent, os.W_OK):
+        raise DatabaseNotWritableError(database_not_writable_message(db_path))
+    return db_path
+
+
 def get_engine(db_path: Path) -> Engine:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path = ensure_database_writable(db_path)
     engine = create_engine(
-        f"sqlite:///{db_path.resolve()}",
+        URL.create("sqlite", database=str(db_path)),
         future=True,
         connect_args={"check_same_thread": False},
     )
-    with engine.connect() as conn:
-        conn.execute(text("PRAGMA foreign_keys = ON"))
-        conn.execute(text("PRAGMA journal_mode = WAL"))
-        conn.commit()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            conn.execute(text("PRAGMA journal_mode = WAL"))
+            conn.commit()
+    except (SQLAlchemyOperationalError, OSError, PermissionError) as exc:
+        engine.dispose()
+        if isinstance(exc, DatabaseNotWritableError):
+            raise
+        if is_readonly_sqlite_error(exc) or isinstance(exc, PermissionError):
+            raise DatabaseNotWritableError(
+                database_not_writable_message(db_path)
+            ) from exc
+        raise
     return engine
 
 

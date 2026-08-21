@@ -136,6 +136,34 @@ rm -rf data/
 python scan_books.py
 ```
 
+### After moving the repository
+
+Relative paths in `config.json` (`data/library.db`, `data/covers`) are resolved
+against the repo directory, so they do not need to become absolute. A scan that
+fails with `attempt to write a readonly database` is almost always **file
+permissions**, not a stale job lock.
+
+Do **not** delete `data/library.lock` for that error. The lock file only
+prevents two maintenance jobs (scan, cleanup, EPUB update) from running at
+once; removing it will not make SQLite writable.
+
+```bash
+ls -l data/library.db data/library.db-wal data/library.db-shm data/
+
+# sudo mv onto another filesystem often leaves the tree owned by root:
+sudo chown -R "$USER:$USER" .
+chmod u+w data data/library.db
+chmod u+w data/library.db-wal data/library.db-shm 2>/dev/null || true
+
+# Recreate the venv so the editable install is not still pointed at the old path:
+python3 -m venv .venv
+.venv/bin/pip install -e .
+./scan_books.py
+```
+
+If Apache serves the UI, set `EXLIBRIS_ROOT` in
+`/etc/apache2/conf-available/exlibris.conf` to the new path and reload Apache.
+
 ### Scheduled scans (cron)
 
 To pick up new books automatically, run a daily scan at 4:00 AM. The helper script activates the project venv, runs `exlibris scan`, then runs `cleanup_library.py run --execute --backfill-hashes --prune-empty-dirs`, and appends output to `data/scan.log`:

@@ -35,7 +35,7 @@ _ensure_project_python()
 import argparse
 
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
-from exlibris.database import get_engine, init_db
+from exlibris.database import DatabaseNotWritableError, get_engine, init_db
 from exlibris.ebook_meta import EbookMetaError, find_ebook_meta
 from exlibris.scanner import print_scan_progress, scan_paths
 
@@ -135,8 +135,12 @@ def _run_scan(args) -> int:
     db_path = resolve_database_path(
         args.database.expanduser() if args.database else settings.database_path
     )
-    engine = get_engine(db_path)
-    SessionLocal = init_db(engine)
+    try:
+        engine = get_engine(db_path)
+        SessionLocal = init_db(engine)
+    except DatabaseNotWritableError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     progress = None if args.quiet else print_scan_progress
 

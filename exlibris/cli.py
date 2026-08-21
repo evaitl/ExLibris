@@ -6,7 +6,7 @@ from pathlib import Path
 import typer
 
 from exlibris.config import load_settings, resolve_covers_dir, resolve_database_path
-from exlibris.database import get_engine, init_db
+from exlibris.database import DatabaseNotWritableError, get_engine, init_db
 from exlibris.scanner import print_scan_progress, scan_paths
 from exlibris.users import UserError, register_user
 
@@ -91,6 +91,9 @@ def scan(
                     validate_epub=True,
                 )
     except LibraryJobLockedError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except DatabaseNotWritableError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
@@ -225,8 +228,12 @@ def user_create(
 
     settings = load_settings(config)
     db_path = resolve_database_path(settings.database_path)
-    engine = get_engine(db_path)
-    init_db(engine)
+    try:
+        engine = get_engine(db_path)
+        init_db(engine)
+    except DatabaseNotWritableError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
 
     import sqlite3
 
