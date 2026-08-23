@@ -9,7 +9,7 @@ CGI web UI to browse the collection. See `README.md` for user-facing docs and
 Two Python paths, on purpose:
 
 - **Web UI (browsing/CGI)** uses only the Python standard library — no venv needed to serve pages.
-- **Scanner / CLI (`exlibris`, `scan_books.py`, `cleanup_library.py`, `update_epubs.py`)** needs the project venv (`typer`, `sqlalchemy`). These scripts auto re-exec with `.venv/bin/python` when run under system Python, so always keep `.venv` present.
+- **Scanner / CLI (`exlibris`, `scan_books.py`, `classify.py`, `cleanup_library.py`, `update_epubs.py`)** needs the project venv (`typer`, `sqlalchemy`). These scripts auto re-exec with `.venv/bin/python` when run under system Python, so always keep `.venv` present.
 
 Environment notes:
 
@@ -24,7 +24,7 @@ Common commands:
 
 - Test: `.venv/bin/python -m pytest` (fast, ~1s; mocks Calibre).
 - Scan: `.venv/bin/python scan_books.py` (or `.venv/bin/exlibris scan`).
-- Classify genres: `.venv/bin/exlibris classify` (dry run) then `--execute`.
+- Classify genres: `./classify.py` (dry run) then `./classify.py --execute` (or `.venv/bin/exlibris classify`).
 - Serve web UI: `.venv/bin/python serve_web.py` (or `.venv/bin/exlibris serve`) → http://127.0.0.1:8080/. Covers are served as static files under `/covers/`, CGI under `/cgi-bin/`, assets under `/static/`.
 - Create a user: `.venv/bin/exlibris user create NAME` (prompts for password, or pass `--password`).
 

@@ -28,6 +28,7 @@ data/               ← runtime data (gitignored)
   covers/
   scan.log
 scan_books.py       ← standalone scan entry point
+classify.py         ← standalone genre classifier (samples EPUB text)
 cleanup_library.py  ← audit/reconcile files vs database
 manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/

@@ -247,13 +247,13 @@ Books whose Genre list includes **Erotica** are omitted from the library, book p
 `exlibris classify` samples EPUB body text and writes up to three Genre labels (most likely first). Calibre subject tags are left as **Subjects** on the detail page and are not used to pick Genre.
 
 ```bash
-exlibris classify                 # dry run: histogram + sample titles
-exlibris classify --execute       # fill empty Genre fields
-exlibris classify --execute --overwrite
-exlibris classify --path /media/books --limit 50 --verbose
+./classify.py                 # dry run: histogram + sample titles
+./classify.py --execute       # fill empty Genre fields
+./classify.py --execute --overwrite
+./classify.py --path /media/books --limit 50 --verbose
 ```
 
-`--adult-threshold` (default 12 explicit-term hits per 1,000 words) appends **Erotica** to fiction books with a high density of sexual language. The job takes the same exclusive `data/library.lock` as scan/cleanup. Default is a dry run; pass `--execute` to write.
+Same options work as `exlibris classify`. `--adult-threshold` (default 12 explicit-term hits per 1,000 words) appends **Erotica** to fiction books with a high density of sexual language. The job takes the same exclusive `data/library.lock` as scan/cleanup. Default is a dry run; pass `--execute` to write. `classify.py` re-runs itself with `.venv/bin/python` when invoked with system Python.
 
 After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
 
