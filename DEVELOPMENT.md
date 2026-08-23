@@ -155,12 +155,13 @@ sudo systemctl restart apache2   # pick up new group
 
 ### Search and filters
 
-**Full-text search (FTS5):** title, author, publisher, and genre filters use `books_fts` with prefix token matching. Language and favorites use ordinary SQL `WHERE` clauses. Migration `006_fts_extend.sql` adds `sort_title` and `tags` to the FTS index and rebuilds it from `books` — no EPUB rescan required.
+**Full-text search (FTS5):** title, author, and publisher filters use `books_fts` with prefix token matching. Genre uses a token match on `books.genre` (comma-separated closed labels). Language and favorites use ordinary SQL `WHERE` clauses. Migration `006_fts_extend.sql` adds `sort_title` and `tags` to the FTS index and rebuilds it from `books` — no EPUB rescan required. Migration `012_genre.sql` adds `genre`, `genre_source`, and `classified_content_hash`.
 
 **Word-based matching:** input split on spaces; every word must match within its filter field. FTS uses `{columns} : ("word"*)` clauses combined with `AND`. Falls back to case-insensitive `LIKE` substring search if FTS query construction fails (e.g. punctuation-only input).
 
 - Title: `title`, `sort_title`, `file_name` (filenames often include author names)
-- Author, publisher, genre: `authors`, `publisher`, `tags`
+- Author, publisher: `authors`, `publisher`
+- Genre: exact label token in `books.genre` (e.g. `Fantasy` matches `Fantasy, Adventure`; `Fiction` does not match `Historical Fiction`)
 
 Example: `j k rowling` matches `J. K. Rowling` and `Rowling, J. K.`
 

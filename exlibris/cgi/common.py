@@ -542,7 +542,7 @@ def book_detail_navigation_from_form(
             book_id,
             browse_ctx,
             user_id=current_user.id if current_user else None,
-            hide_erotica=not is_admin_user(current_user),
+            hide_erotica=hide_erotica_for(current_user),
         )
     return browse_ctx, prev_book_id, next_book_id
 
@@ -883,6 +883,17 @@ def admin_mode_enabled() -> bool:
 
 def is_admin(user: UserRow | None) -> bool:
     return is_admin_user(user) and admin_mode_enabled()
+
+
+def hide_erotica_for(user: UserRow | None) -> bool:
+    """Non-admins must not see books whose Genre list includes Erotica."""
+    return not is_admin_user(user)
+
+
+def may_access_book(*, user: UserRow | None, genre: str | None) -> bool:
+    if hide_erotica_for(user) and genre_contains_erotica(genre):
+        return False
+    return True
 
 
 def genre_column_available(conn: sqlite3.Connection) -> bool:

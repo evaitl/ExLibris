@@ -11,14 +11,19 @@ import pytest
 
 from exlibris.cgi.common import (
     EditBookError,
+    UserRow,
     book_edit_fields,
     get_book,
+    hide_erotica_for,
     list_books,
+    may_access_book,
 )
 from exlibris.classify import classify_text, sample_epub_text
 from exlibris.classify_job import classify_library
 from exlibris.epub_validate import iter_spine_xhtml
+from exlibris.genre_lexicons import GENRE_LEXICONS
 from exlibris.genres import (
+    ALL_GENRES,
     format_genre_labels,
     genre_contains_erotica,
     parse_genre_labels,
@@ -275,6 +280,27 @@ def test_get_book_hides_erotica(tmp_path: Path) -> None:
     assert get_book(conn, public_id, hide_erotica=True) is not None
     assert get_book(conn, hidden_id, hide_erotica=True) is None
     assert get_book(conn, hidden_id, hide_erotica=False) is not None
+
+
+def test_may_access_book_uses_admin_username_not_mode(monkeypatch) -> None:
+    admin = UserRow(id=1, username="alice")
+    visitor = UserRow(id=2, username="bob")
+    monkeypatch.setattr(
+        "exlibris.cgi.common.is_admin_username",
+        lambda username: username == "alice",
+    )
+    assert hide_erotica_for(None)
+    assert hide_erotica_for(visitor)
+    assert not hide_erotica_for(admin)
+    assert may_access_book(user=None, genre="Fantasy")
+    assert not may_access_book(user=None, genre="Romance, Erotica")
+    assert not may_access_book(user=visitor, genre="Romance, Erotica")
+    assert may_access_book(user=admin, genre="Romance, Erotica")
+
+
+def test_closed_vocabulary_has_sixty_genres_with_lexicons() -> None:
+    assert len(ALL_GENRES) == 60
+    assert set(GENRE_LEXICONS) == set(ALL_GENRES)
 
 
 def test_genre_contains_erotica() -> None:

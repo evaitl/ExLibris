@@ -16,7 +16,7 @@ from exlibris.cgi.common import (
     connect,
     get_book,
     get_current_user,
-    is_admin_user,
+    hide_erotica_for,
     is_favorite,
     neighbor_book_ids,
     parse_library_browse_context,
@@ -42,7 +42,7 @@ def main() -> None:
     try:
         with connect() as conn:
             current_user = get_current_user(conn)
-            hide_erotica = not is_admin_user(current_user)
+            hide_erotica = hide_erotica_for(current_user)
             favorites_only = (
                 form.getfirst("favorites") == "1" and current_user is not None
             )

@@ -23,6 +23,7 @@ from exlibris.cgi.common import (
     connect,
     connect_rw,
     get_book,
+    hide_erotica_for,
     is_admin,
     update_book_fields,
 )
@@ -83,7 +84,7 @@ def main() -> None:
 
     with connect() as conn:
         current_user, is_favorite = book_detail_context(conn, book_id)
-        book = get_book(conn, book_id)
+        book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
 
     if book is None:
         _html(render_error("Book not found.", status_hint="Not found"))
@@ -123,14 +124,14 @@ def main() -> None:
 
     try:
         with connect_rw() as conn:
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
             if book is None:
                 _html(render_error("Book not found.", status_hint="Not found"))
                 return
             update_book_fields(conn, book_id, fields)
 
         with connect() as conn:
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error("Book not found after update.", status_hint="Not found"))
@@ -152,7 +153,7 @@ def main() -> None:
         _html(render_error(str(exc), status_hint="Database unavailable"))
     except PermissionError as exc:
         with connect() as conn:
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(str(exc)))
@@ -177,7 +178,7 @@ def main() -> None:
                 "access to the data/ directory (see scripts/setup-data-dir.sh)."
             )
         with connect() as conn:
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(message))
@@ -197,7 +198,7 @@ def main() -> None:
     except Exception:
         traceback.print_exc(file=sys.stderr)
         with connect() as conn:
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error("Unexpected error while updating book."))

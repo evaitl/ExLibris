@@ -25,6 +25,7 @@ from exlibris.cgi.common import (
     connect_rw,
     delete_book,
     get_book,
+    hide_erotica_for,
     is_admin,
 )
 from exlibris.cgi.render import render_book_detail, render_error
@@ -87,7 +88,7 @@ def main() -> None:
 
     with connect() as conn:
         current_user, is_favorite = book_detail_context(conn, book_id)
-        book = get_book(conn, book_id, include_missing=True)
+        book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
 
     if book is None:
         _html(render_error("Book not found.", status_hint="Not found"))
@@ -120,7 +121,7 @@ def main() -> None:
             )
 
         with connect_rw() as conn:
-            book = get_book(conn, book_id, include_missing=True)
+            book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
             if book is None:
                 _html(render_error("Book not found.", status_hint="Not found"))
                 return
@@ -130,7 +131,7 @@ def main() -> None:
         target_id = next_book_id or prev_book_id
         if target_id is not None:
             with connect() as conn:
-                if get_book(conn, target_id) is None:
+                if get_book(conn, target_id, hide_erotica=hide_erotica_for(current_user)) is None:
                     target_id = None
 
         if target_id is not None:
@@ -146,7 +147,7 @@ def main() -> None:
         _html(render_error(str(exc), status_hint="Database unavailable"))
     except PermissionError as exc:
         with connect() as conn:
-            book = get_book(conn, book_id, include_missing=True)
+            book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(str(exc)))
@@ -170,7 +171,7 @@ def main() -> None:
                 "access to the data/ directory (see scripts/setup-data-dir.sh)."
             )
         with connect() as conn:
-            book = get_book(conn, book_id, include_missing=True)
+            book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(message))
@@ -188,7 +189,7 @@ def main() -> None:
             )
     except DeleteBookError as exc:
         with connect() as conn:
-            book = get_book(conn, book_id, include_missing=True)
+            book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error(str(exc)))
@@ -207,7 +208,7 @@ def main() -> None:
     except Exception:
         traceback.print_exc(file=sys.stderr)
         with connect() as conn:
-            book = get_book(conn, book_id, include_missing=True)
+            book = get_book(conn, book_id, include_missing=True, hide_erotica=hide_erotica_for(current_user))
             current_user, is_favorite = book_detail_context(conn, book_id)
         if book is None:
             _html(render_error("Unexpected error while deleting book."))
