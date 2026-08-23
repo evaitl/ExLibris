@@ -249,5 +249,96 @@ def user_create(
     typer.echo(f"Created user {cleaned!r}.")
 
 
+@app.command("classify")
+def classify_cmd(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config.json"
+    ),
+    path: list[Path] = typer.Option(
+        None, "--path", "-p", help="Only classify books under this directory or file"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Maximum number of books to examine"
+    ),
+    execute: bool = typer.Option(
+        False, "--execute", help="Write genre values (default is a dry run)"
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Reclassify books with automatic genre values"
+    ),
+    overwrite_manual: bool = typer.Option(
+        False,
+        "--overwrite-manual",
+        help="Also replace genres that were edited by an administrator",
+    ),
+    adult_threshold: float | None = typer.Option(
+        None,
+        "--adult-threshold",
+        help="Explicit-term hits per 1,000 words that add Erotica (default: 12)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """Sample EPUB text and fill the Genre field (up to three labels)."""
+    from exlibris.classify import DEFAULT_ADULT_THRESHOLD
+    from exlibris.classify_job import classify_library, open_library_connection
+    from exlibris.job_lock import LibraryJobLockedError, library_job_lock
+
+    settings = load_settings(config)
+    db_path = resolve_database_path(settings.database_path)
+    threshold = (
+        DEFAULT_ADULT_THRESHOLD if adult_threshold is None else adult_threshold
+    )
+    if threshold < 0:
+        typer.echo("--adult-threshold must be non-negative.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        with library_job_lock(job_name="library classify"):
+            engine = get_engine(db_path)
+            init_db(engine)
+            engine.dispose()
+            conn = open_library_connection(db_path)
+            try:
+                stats = classify_library(
+                    conn,
+                    execute=execute,
+                    overwrite=overwrite,
+                    overwrite_manual=overwrite_manual,
+                    adult_threshold=threshold,
+                    path_filters=[p.expanduser() for p in path] if path else None,
+                    limit=limit,
+                    on_progress=None if quiet else (print if verbose else None),
+                )
+            finally:
+                conn.close()
+    except LibraryJobLockedError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except DatabaseNotWritableError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    mode = "Wrote" if execute else "Dry run"
+    typer.echo(
+        f"{mode}: examined {stats.examined}, classified {stats.classified}, "
+        f"skipped {stats.skipped}, empty {stats.empty}, failed {stats.failed}."
+    )
+    if stats.histogram:
+        typer.echo("Genre counts:")
+        for label, count in stats.histogram.most_common():
+            typer.echo(f"  {label}: {count}")
+    if not verbose and stats.samples:
+        typer.echo("Sample:")
+        for line in stats.samples[:15]:
+            typer.echo(f"  {line}")
+    if stats.errors:
+        typer.echo(f"{len(stats.errors)} issue(s):")
+        for err in stats.errors:
+            typer.echo(f"  - {err}")
+    if not execute:
+        typer.echo("Re-run with --execute to write genre values.")
+
+
 if __name__ == "__main__":
     app()

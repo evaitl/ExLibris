@@ -200,7 +200,8 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 
 ### Web UI features
 
-- **Full-text search** (FTS5) by title, author, publisher, and genre — fast on large libraries; no rescan needed
+- **Full-text search** (FTS5) by title, author, and publisher — fast on large libraries; no rescan needed
+- **Genre** — a closed list (up to three labels per book) filled by `exlibris classify`; library filter is a dropdown. Books tagged **Erotica** are hidden unless you are logged in as an administrator
 - **Search** — filters apply when you press Enter in a field or click **Apply**
 - **Pagination** with configurable page size (10, 25, 50, 100, or 200); **Previous/Next** use keyset cursors (`after_id` / `before_id`) for fast browsing at any depth; **Jump to page** still uses offset when you need a specific page number
 - **Jump to page** and **sort** by title, author, published date, size, pages, last scanned, or random
@@ -210,7 +211,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Accounts** — optional login to save **favorites** (browse and download work without an account)
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages; small star on library cards when signed in
 - Book detail pages with cover, formatted dates, file name, plain-text descriptions (HTML escaped), download
-- **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified)
+- **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified). Genre is a comma-separated list of up to three labels from the closed vocabulary.
 - **Fetch metadata online** and **restore cover from file** (embedded EPUB cover) — administrators only
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
 
@@ -233,11 +234,26 @@ cp admins.txt.example admins.txt
 
 Admin capabilities on the book detail page:
 
-- Edit title, author, and genre (database only; EPUB files unchanged)
+- Edit title, author, and genre (database only; EPUB files unchanged). Genre accepts up to three labels from the classifier vocabulary, comma-separated.
 - Fetch metadata online
 - Restore cover from the embedded EPUB image
 
-**Fetch metadata** fills empty fields by default. To replace existing title, author, publisher, etc., check **Overwrite existing metadata** on the fetch form. Null values from online sources never clear stored fields.
+Books whose Genre list includes **Erotica** are omitted from the library, book pages, and downloads for everyone except logged-in administrators (`admins.txt`).
+
+**Fetch metadata** fills empty fields by default. To replace existing title, author, publisher, etc., check **Overwrite existing metadata** on the fetch form. Null values from online sources never clear stored fields. Fetch does not change classifier Genre values.
+
+### Classify genres
+
+`exlibris classify` samples EPUB body text and writes up to three Genre labels (most likely first). Calibre subject tags are left as **Subjects** on the detail page and are not used to pick Genre.
+
+```bash
+exlibris classify                 # dry run: histogram + sample titles
+exlibris classify --execute       # fill empty Genre fields
+exlibris classify --execute --overwrite
+exlibris classify --path /media/books --limit 50 --verbose
+```
+
+`--adult-threshold` (default 12 explicit-term hits per 1,000 words) appends **Erotica** to fiction books with a high density of sexual language. The job takes the same exclusive `data/library.lock` as scan/cleanup. Default is a dry run; pass `--execute` to write.
 
 After upgrading from an older version, run a scan once to apply database migrations (including FTS index rebuild):
 

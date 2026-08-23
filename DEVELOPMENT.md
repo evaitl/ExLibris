@@ -31,9 +31,12 @@ scan_books.py       ← standalone scan entry point
 cleanup_library.py  ← audit/reconcile files vs database
 manage_users.py     ← list/delete web accounts (stdlib)
 exlibris/
-  schema/           ← SQL migrations (001–011)
+  schema/           ← SQL migrations (001–012)
   models.py         ← SQLAlchemy ORM
   database.py       ← init, migrations, WAL mode, upsert
+  genres.py         ← closed Genre vocabulary (CGI-safe)
+  classify.py       ← EPUB text sampling and genre scoring
+  classify_job.py   ← batch `exlibris classify`
   auth.py           ← scrypt passwords, signed session cookies
   users.py          ← user CRUD, favorites
   admins.py         ← reads admins.txt for curation permissions
@@ -418,6 +421,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover
 - **Cleanup:** `cleanup_library.py` / `exlibris cleanup`; cron runs after scan; exclusive `data/library.lock`
 - **EPUB maintenance:** validation flags (009), EPUB 2 conversion (`update_epubs.py`, 010), partial indexes (011)
+- **Genre classifier:** `012_genre.sql`; `exlibris classify` samples EPUB text into up to three labels; Erotica is admin-only in the library
 - **Fetch metadata:** DB + covers only; placeholders rejected; existing cover kept when no new image
 - **Apache:** path mount `/exlibris/`; `EXLIBRIS_ROOT` must match server install path
 - **Scale target:** ~600K books — FTS, keyset pagination, and partial indexes for EPUB queues in place

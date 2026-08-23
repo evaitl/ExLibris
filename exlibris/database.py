@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from exlibris.models import Book
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 class DatabaseNotWritableError(PermissionError):

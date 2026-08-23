@@ -7,6 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
@@ -325,3 +326,82 @@ def find_ebook_meta_optional(explicit: str | None = None) -> str | None:
         path = Path(explicit).expanduser()
         return str(path.resolve()) if path.exists() else None
     return shutil.which("ebook-meta")
+
+
+def _decode_xhtml(content: bytes) -> str:
+    for encoding in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("utf-8", errors="replace")
+
+
+def iter_spine_xhtml(path: Path) -> Iterator[str]:
+    """Yield XHTML markup for each readable spine document in an EPUB."""
+    path = path.expanduser().resolve()
+    if not path.is_file() or not zipfile.is_zipfile(path):
+        return
+    try:
+        with _open_epub_zip(path) as archive:
+            lookup = _zip_name_lookup(archive)
+            names = set(lookup.keys())
+            if CONTAINER_PATH not in names:
+                return
+            try:
+                container_xml = _read_zip_member(archive, lookup, CONTAINER_PATH)
+            except KeyError:
+                return
+            try:
+                container_root = ET.fromstring(container_xml)
+            except ET.ParseError:
+                return
+            opf_path = None
+            for rootfile in container_root.findall(".//cn:rootfile", CONTAINER_NS):
+                full_path = rootfile.attrib.get("full-path", "").strip()
+                if full_path:
+                    opf_path = _zip_entry_name(full_path)
+                    break
+            if not opf_path or opf_path not in names:
+                return
+            try:
+                opf_xml = _read_zip_member(archive, lookup, opf_path)
+            except KeyError:
+                return
+            try:
+                opf_root = ET.fromstring(opf_xml)
+            except ET.ParseError:
+                return
+            manifest: dict[str, tuple[str, str]] = {}
+            for item in opf_root.findall(".//opf:manifest/opf:item", OPF_NS):
+                item_id = item.attrib.get("id", "").strip()
+                href = item.attrib.get("href", "").strip()
+                media_type = item.attrib.get("media-type", "").strip()
+                if item_id and href:
+                    manifest[item_id] = (href, media_type)
+            spine_refs = [
+                itemref.attrib.get("idref", "").strip()
+                for itemref in opf_root.findall(".//opf:spine/opf:itemref", OPF_NS)
+                if itemref.attrib.get("idref", "").strip()
+            ]
+            for idref in spine_refs:
+                entry = manifest.get(idref)
+                if entry is None:
+                    continue
+                href, media_type = entry
+                member = _resolve_manifest_href(opf_path, href)
+                if member not in names:
+                    continue
+                if media_type not in READABLE_MEDIA_TYPES and not member.lower().endswith(
+                    (".xhtml", ".html", ".htm")
+                ):
+                    continue
+                try:
+                    content = _read_zip_member(archive, lookup, member)
+                except (KeyError, OSError):
+                    continue
+                if not content.strip():
+                    continue
+                yield _decode_xhtml(content)
+    except (zipfile.BadZipFile, UnicodeDecodeError, OSError):
+        return

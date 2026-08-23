@@ -67,6 +67,9 @@ class Book(Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[str | None] = mapped_column(String, nullable=True)
+    genre: Mapped[str | None] = mapped_column(String, nullable=True)
+    genre_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    classified_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False)
     last_scanned_at: Mapped[datetime] = mapped_column(nullable=False)

@@ -37,6 +37,14 @@ from exlibris.cover_paths import (
     parse_book_id_from_cover,
     remove_cover_files,
 )
+from exlibris.genres import (
+    erotica_hidden_sql,
+    erotica_visible_sql,
+    format_genre_labels,
+    genre_contains_erotica,
+    genre_token_like_sql,
+    parse_genre_labels,
+)
 from exlibris.library_cache import cached_languages, cached_library_total, refresh_library_stats
 
 
@@ -71,6 +79,7 @@ class BookRow:
     first_seen_at: str
     last_scanned_at: str
     is_missing: int
+    genre: str | None = None
 
 
 def project_root() -> Path:
@@ -295,6 +304,7 @@ def row_to_book(row: sqlite3.Row) -> BookRow:
         first_seen_at=str(col("first_seen_at", "")),
         last_scanned_at=str(col("last_scanned_at", "")),
         is_missing=int(col("is_missing", 0)),
+        genre=col("genre"),
     )
 
 
@@ -532,6 +542,7 @@ def book_detail_navigation_from_form(
             book_id,
             browse_ctx,
             user_id=current_user.id if current_user else None,
+            hide_erotica=not is_admin_user(current_user),
         )
     return browse_ctx, prev_book_id, next_book_id
 
@@ -874,6 +885,28 @@ def is_admin(user: UserRow | None) -> bool:
     return is_admin_user(user) and admin_mode_enabled()
 
 
+def genre_column_available(conn: sqlite3.Connection) -> bool:
+    try:
+        conn.execute("SELECT genre FROM books LIMIT 0")
+    except sqlite3.OperationalError:
+        return False
+    return True
+
+
+def cached_public_library_total(
+    conn: sqlite3.Connection, *, hide_erotica: bool
+) -> int:
+    total = cached_library_total(conn)
+    if not hide_erotica or not genre_column_available(conn):
+        return total
+    hidden = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM books WHERE is_missing = 0 AND {erotica_hidden_sql()}"
+        ).fetchone()[0]
+    )
+    return max(0, total - hidden)
+
+
 def _book_filter_clause(
     conn: sqlite3.Connection,
     *,
@@ -886,11 +919,13 @@ def _book_filter_clause(
     sort_dir: str = "asc",
     favorites_only: bool = False,
     user_id: int | None = None,
+    hide_erotica: bool = True,
 ) -> tuple[str | None, list[str], list[object], str]:
     order_by = sort_order_by(sort, sort_dir)
     params: list[object] = []
     where: list[str] = ["books.is_missing = 0"]
     use_author_tokens = author_tokens_available(conn)
+    has_genre = genre_column_available(conn)
     fts_match = build_fts_match(
         title=title,
         publisher=publisher,
@@ -934,13 +969,20 @@ def _book_filter_clause(
                 words=_search_words(publisher),
                 columns=["books.publisher"],
             )
+
+    if has_genre:
+        if hide_erotica:
+            where.append(erotica_visible_sql())
         if genre.strip():
-            _append_word_match(
-                where,
-                params,
-                words=_search_words(genre),
-                columns=["books.tags"],
-            )
+            where.append(genre_token_like_sql())
+            params.append(genre.strip())
+    elif genre.strip():
+        _append_word_match(
+            where,
+            params,
+            words=_search_words(genre),
+            columns=["books.tags"],
+        )
 
     if language:
         where.append("books.language = ?")
@@ -1012,11 +1054,12 @@ def list_books(
     before_id: int | None = None,
     favorites_only: bool = False,
     user_id: int | None = None,
+    hide_erotica: bool = True,
 ) -> tuple[list[BookRow], int, int, int, FilterOptions, bool]:
     """Return books, filtered_count, library_total, page, options, count_exact."""
     sort_dir = normalize_sort_dir(sort, sort_dir)
     page_size = normalize_page_size(page_size)
-    library_total = cached_library_total(conn)
+    library_total = cached_public_library_total(conn, hide_erotica=hide_erotica)
     options = load_filter_options(conn)
 
     fts_match, where, params, order_by = _book_filter_clause(
@@ -1030,6 +1073,7 @@ def list_books(
         sort_dir=sort_dir,
         favorites_only=favorites_only,
         user_id=user_id,
+        hide_erotica=hide_erotica,
     )
 
     filtered = has_search_filters(
@@ -1167,6 +1211,7 @@ def neighbor_book_ids(
     ctx: LibraryBrowseContext,
     *,
     user_id: int | None = None,
+    hide_erotica: bool = True,
 ) -> tuple[int | None, int | None]:
     """Previous and next book ids in the current filtered/sorted library view."""
     ctx = ctx.normalized()
@@ -1184,6 +1229,7 @@ def neighbor_book_ids(
         sort_dir=ctx.sort_dir,
         favorites_only=ctx.favorites_only,
         user_id=user_id,
+        hide_erotica=hide_erotica,
     )
 
     parts = _sort_key_parts(ctx.sort, ctx.sort_dir)
@@ -1221,6 +1267,7 @@ def get_book(
     book_id: int,
     *,
     include_missing: bool = False,
+    hide_erotica: bool = False,
 ) -> BookRow | None:
     if include_missing:
         row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
@@ -1229,7 +1276,10 @@ def get_book(
             "SELECT * FROM books WHERE id = ? AND is_missing = 0",
             (book_id,),
         ).fetchone()
-    return row_to_book(row) if row else None
+    book = row_to_book(row) if row else None
+    if book is not None and hide_erotica and genre_contains_erotica(book.genre):
+        return None
+    return book
 
 
 def update_book_fields(conn: sqlite3.Connection, book_id: int, fields: dict[str, object]) -> None:
@@ -1293,12 +1343,19 @@ def book_edit_fields(
     """Validate and build DB updates for a manual metadata edit."""
     cleaned_title = (title or "").strip()
     cleaned_authors = (authors or "").strip()
-    cleaned_genre = (genre or "").strip()
+    try:
+        labels = parse_genre_labels(genre)
+    except ValueError as exc:
+        raise EditBookError(str(exc)) from exc
+    if len(labels) > 3:
+        raise EditBookError("Genre can list at most three labels.")
     if not cleaned_title:
         raise EditBookError("Title cannot be empty.")
-    return {
+    fields: dict[str, object] = {
         "title": cleaned_title,
         "authors": cleaned_authors or None,
         "sort_title": cleaned_title,
-        "tags": cleaned_genre or None,
+        "genre": format_genre_labels(labels),
+        "genre_source": "manual" if labels else None,
     }
+    return fields

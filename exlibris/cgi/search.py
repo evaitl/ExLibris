@@ -72,10 +72,6 @@ def build_fts_match(
         clause = fts_field_match(["publisher"], search_words(publisher))
         if clause:
             parts.append(clause)
-    if genre.strip():
-        clause = fts_field_match(["tags"], search_words(genre))
-        if clause:
-            parts.append(clause)
     if not parts:
         return None
     return " AND ".join(parts)

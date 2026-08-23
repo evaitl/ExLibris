@@ -38,6 +38,7 @@ from exlibris.cgi.common import (
     static_asset,
     static_href,
 )
+from exlibris.genres import filter_genre_groups
 
 
 def _header_auth(current_user: UserRow | None) -> str:
@@ -131,6 +132,19 @@ def _select_options(
         lines.append(
             f'          <option value="{esc(option)}"{is_selected} title="{esc(option)}">{esc(label)}</option>'
         )
+    return "\n".join(lines)
+
+
+def _genre_select_options(selected: str, *, include_erotica: bool) -> str:
+    lines = ['          <option value="">Genre</option>']
+    for group_name, labels in filter_genre_groups(include_erotica=include_erotica):
+        lines.append(f'          <optgroup label="{esc(group_name)}">')
+        for option in labels:
+            is_selected = " selected" if option == selected else ""
+            lines.append(
+                f'            <option value="{esc(option)}"{is_selected}>{esc(option)}</option>'
+            )
+        lines.append("          </optgroup>")
     return "\n".join(lines)
 
 
@@ -605,7 +619,9 @@ def render_library(
           <input class="filter-input" type="search" id="search-title" name="title" value="{esc(selected_title)}" placeholder="Title" aria-label="Filter by title" autocomplete="off">
           <input class="filter-input" type="search" name="author" value="{esc(selected_author)}" placeholder="Author" aria-label="Filter by author" autocomplete="off">
           <input class="filter-input" type="search" name="publisher" value="{esc(selected_publisher)}" placeholder="Publisher" aria-label="Filter by publisher" autocomplete="off">
-          <input class="filter-input" type="search" name="genre" value="{esc(selected_genre)}" placeholder="Genre" aria-label="Filter by genre" autocomplete="off">
+          <select class="filter-input" name="genre" aria-label="Filter by genre" data-filter-auto>
+{_genre_select_options(selected_genre, include_erotica=is_admin_user(current_user))}
+          </select>
           <select class="filter-input" name="language" aria-label="Filter by language" data-filter-auto>
 {_select_options(options.languages, selected_language, "Language", max_label=10)}
           </select>
@@ -751,7 +767,7 @@ def render_book_detail(
 ) -> str:
     title = book.title or book.file_name
     authors_value = book.authors or ""
-    genre_value = book.tags or ""
+    genre_value = book.genre or ""
     user_is_admin = is_admin(current_user)
     ctx = (browse_ctx or LibraryBrowseContext()).normalized()
     back_url = library_index_href(ctx)
@@ -789,7 +805,8 @@ def render_book_detail(
         ("Published", format_published_date(book.published_date)),
         ("ISBN", book.isbn),
         ("Language", book.language),
-        ("Genre", book.tags),
+        ("Genre", book.genre),
+        ("Subjects", book.tags),
         ("Pages", str(book.page_count) if book.page_count is not None else None),
         ("File name", book.file_name),
     ]
@@ -883,7 +900,7 @@ def render_book_detail(
                 </label>
                 <label class="book-edit-form__label">
                   <span class="book-edit-form__name">Genre</span>
-                  <input class="filter-input book-edit-form__input" type="text" name="genre" value="{esc(genre_value)}" maxlength="500">
+                  <input class="filter-input book-edit-form__input" type="text" name="genre" value="{esc(genre_value)}" maxlength="240" placeholder="Fantasy, Romance">
                 </label>
               </div>
               <button type="submit" class="button button--fetch">Save metadata</button>

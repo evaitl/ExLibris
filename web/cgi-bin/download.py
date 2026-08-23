@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import cgi
 import mimetypes
+import sqlite3
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -13,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from exlibris.cgi.common import allowed_book_file, connect
+from exlibris.cgi.common import allowed_book_file, connect, get_current_user, is_admin_user
+from exlibris.genres import genre_contains_erotica
 
 
 def main() -> None:
@@ -31,10 +33,17 @@ def main() -> None:
 
     try:
         with connect() as conn:
-            row = conn.execute(
-                "SELECT file_path, file_name, is_missing FROM books WHERE id = ?",
-                (book_id,),
-            ).fetchone()
+            current_user = get_current_user(conn)
+            try:
+                row = conn.execute(
+                    "SELECT file_path, file_name, is_missing, genre FROM books WHERE id = ?",
+                    (book_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                row = conn.execute(
+                    "SELECT file_path, file_name, is_missing FROM books WHERE id = ?",
+                    (book_id,),
+                ).fetchone()
     except FileNotFoundError:
         print("Status: 503 Service Unavailable")
         print("Content-Type: text/plain; charset=utf-8")
@@ -43,6 +52,14 @@ def main() -> None:
         return
 
     if row is None or row["is_missing"]:
+        print("Status: 404 Not Found")
+        print("Content-Type: text/plain; charset=utf-8")
+        print()
+        print("Book not found")
+        return
+
+    genre = row["genre"] if "genre" in row.keys() else None
+    if genre_contains_erotica(genre) and not is_admin_user(current_user):
         print("Status: 404 Not Found")
         print("Content-Type: text/plain; charset=utf-8")
         print()

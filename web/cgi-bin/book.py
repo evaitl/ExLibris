@@ -16,6 +16,7 @@ from exlibris.cgi.common import (
     connect,
     get_book,
     get_current_user,
+    is_admin_user,
     is_favorite,
     neighbor_book_ids,
     parse_library_browse_context,
@@ -41,6 +42,7 @@ def main() -> None:
     try:
         with connect() as conn:
             current_user = get_current_user(conn)
+            hide_erotica = not is_admin_user(current_user)
             favorites_only = (
                 form.getfirst("favorites") == "1" and current_user is not None
             )
@@ -56,7 +58,7 @@ def main() -> None:
                 page=form.getfirst("page", "1") or "1",
                 favorites_only=favorites_only,
             )
-            book = get_book(conn, book_id)
+            book = get_book(conn, book_id, hide_erotica=hide_erotica)
             favorite = (
                 is_favorite(conn, user_id=current_user.id, book_id=book_id)
                 if current_user is not None
@@ -67,6 +69,7 @@ def main() -> None:
                 book_id,
                 browse_ctx,
                 user_id=current_user.id if current_user else None,
+                hide_erotica=hide_erotica,
             )
         if book is None:
             print("Content-Type: text/html; charset=utf-8")

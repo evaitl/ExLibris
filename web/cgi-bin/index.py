@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from exlibris.cgi.common import connect, favorite_book_ids, get_current_user, list_books
+from exlibris.cgi.common import connect, favorite_book_ids, get_current_user, is_admin_user, list_books
 from exlibris.cgi.render import render_error, render_library
 
 
@@ -56,6 +56,7 @@ def main() -> None:
                 before_id=before_id,
                 favorites_only=favorites_only,
                 user_id=current_user.id if current_user else None,
+                hide_erotica=not is_admin_user(current_user),
             )
             fav_ids = (
                 favorite_book_ids(conn, current_user.id)
