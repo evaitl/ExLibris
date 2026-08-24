@@ -223,6 +223,13 @@ body {
   max-width: 16rem;
 }
 
+.filter-form--compact .filter-form__main > select[name="genre"] {
+  flex: 0 0 8.5rem;
+  min-width: 7.75rem;
+  max-width: 9.5rem;
+  width: 8.5rem;
+}
+
 .filter-form--compact .filter-form__main > select[name="language"] {
   flex: 0 0 5.75rem;
   min-width: 5.25rem;
