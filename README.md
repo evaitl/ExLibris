@@ -212,7 +212,7 @@ ExLibris serves the library through a Python CGI frontend in `web/`.
 - **Favorites only** filter when signed in; favorite checkbox on book detail pages; small star on library cards when signed in
 - Book detail pages with cover, formatted dates, file name, plain-text descriptions (HTML escaped), download
 - **Edit title, author, and genre** on the detail page for administrators listed in `admins.txt` (stored in the database only; EPUB files are not modified). Genre is a comma-separated list of up to three labels from the closed vocabulary.
-- **Fetch metadata online** and **restore cover from file** (embedded EPUB cover) — administrators only
+- **Fetch metadata online**, **restore cover from file** (embedded EPUB cover), and **upload a new cover image** — administrators only
 - Fetch updates metadata only; placeholder covers from online sources are rejected; existing covers are kept when no real image is found
 
 ### User accounts
@@ -237,6 +237,7 @@ Admin capabilities on the book detail page:
 - Edit title, author, and genre (database only; EPUB files unchanged). Genre accepts up to three labels from the classifier vocabulary, comma-separated.
 - Fetch metadata online
 - Restore cover from the embedded EPUB image
+- Upload a JPEG or PNG cover image (replaces the current cover; EPUB files are not modified)
 
 Books whose Genre list includes **Erotica** are omitted from the library, book pages, and downloads for everyone except logged-in administrators (`admins.txt`).
 

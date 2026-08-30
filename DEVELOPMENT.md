@@ -63,7 +63,7 @@ scripts/
   scan-library.sh   ← cron: scan then cleanup (backfill hashes, prune dirs)
 web/
   cgi-bin/          ← index, book, cover, download, fetch_metadata, restore_cover,
-                    ←   login, logout, register, favorite, edit_book
+                    ←   upload_cover, login, logout, register, favorite, edit_book
   static/
     style.css
     library.js      ← debounced search, keyboard shortcuts, sort arrows
@@ -71,7 +71,7 @@ web/
     swipe-nav.js    ← touch swipe prev/next (library and detail)
 ```
 
-`admins.txt` at the project root lists administrator usernames (gitignored; copy from `admins.txt.example`). Used for metadata edit, fetch metadata, and restore cover.
+`admins.txt` at the project root lists administrator usernames (gitignored; copy from `admins.txt.example`). Used for metadata edit, fetch metadata, restore cover, and cover upload.
 
 ### Data flow
 
@@ -79,7 +79,7 @@ web/
 2. **Cleanup:** compares scan roots to DB — sanitizes filenames, dedupes by SHA-1 (longest basename), optionally validates EPUB structure and removes corrupt files (`--validate-epubs`), indexes new EPUBs, optional hash backfill, prune empty dirs, optional hard purge (`--force-clean`).
 3. **Browse:** CGI scripts read the database; FTS5 search with server-side pagination; cover images served as static files under `/exlibris/covers/` (sharded on disk as `data/covers/NN/{id}.jpg`).
 4. **Download:** serves EPUBs only if the path is under a configured scan directory.
-5. **Curation (admins only):** fetch metadata online, restore embedded cover, manual title/author/genre edit — all update the database/covers only.
+5. **Curation (admins only):** fetch metadata online, restore embedded cover, upload a cover image, manual title/author/genre edit — all update the database/covers only.
 
 ---
 
@@ -420,7 +420,7 @@ Keeper rule: `max(path, key=(len(basename), len(fullpath), path))`.
 - **Library browse:** FTS search, keyset pagination (prev/next), favorites filter (★ on cards when signed in), random sort, keyboard and swipe navigation
 - **Detail browse:** prev/next book in current filter/sort context (keyboard + swipe)
 - **Accounts:** optional login for favorites; `manage_users.py` for server-side list/delete; open web registration
-- **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover
+- **Admins:** `admins.txt` (local, gitignored) gates metadata edit, fetch metadata, restore cover, upload cover
 - **Cleanup:** `cleanup_library.py` / `exlibris cleanup`; cron runs after scan; exclusive `data/library.lock`
 - **EPUB maintenance:** validation flags (009), EPUB 2 conversion (`update_epubs.py`, 010), partial indexes (011)
 - **Genre classifier:** `012_genre.sql`; `exlibris classify` samples EPUB text into up to three labels; Erotica is admin-only in the library
