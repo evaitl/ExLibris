@@ -28,6 +28,7 @@ from exlibris.cgi.common import (
     logout_action,
     register_action,
     restore_cover_action,
+    upload_cover_action,
     format_published_date,
     format_size,
     has_search_filters,
@@ -840,11 +841,22 @@ def render_book_detail(
 """
 
     restore_cover_form = ""
+    upload_cover_form = ""
     if user_is_admin and not book.is_missing:
         restore_cover_form = f"""              <form class="book-actions__form book-actions__form--restore" method="post" action="{esc(restore_cover_action())}" onsubmit="return confirm('Restore the cover embedded in this ebook? The current cover image will be replaced.');">
                 <input type="hidden" name="id" value="{book.id}">
                 {browse_hidden}
                 <button type="submit" class="button button--restore">Restore cover from file</button>
+              </form>
+"""
+        upload_cover_form = f"""              <form class="book-actions__form book-actions__form--upload" method="post" action="{esc(upload_cover_action())}" enctype="multipart/form-data">
+                <input type="hidden" name="id" value="{book.id}">
+                {browse_hidden}
+                <label class="cover-upload">
+                  <span class="cover-upload__name">New cover</span>
+                  <input class="cover-upload__file" type="file" name="cover" accept="image/jpeg,image/png,.jpg,.jpeg,.png" required>
+                </label>
+                <button type="submit" class="button button--restore">Upload cover</button>
               </form>
 """
 
@@ -921,11 +933,11 @@ def render_book_detail(
           <header class="book-detail__header">
             <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
 {title_author_block}
-{favorite_form}            <p class="book-actions">
+{favorite_form}            <div class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
-              {fetch_metadata_form}{restore_cover_form}{delete_book_form}
+              {fetch_metadata_form}{restore_cover_form}{upload_cover_form}{delete_book_form}
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
-            </p>
+            </div>
           </header>
 
           <dl class="meta-grid">

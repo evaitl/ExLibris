@@ -144,6 +144,10 @@ def restore_cover_action() -> str:
     return cgi_script("restore_cover.py")
 
 
+def upload_cover_action() -> str:
+    return cgi_script("upload_cover.py")
+
+
 def login_action() -> str:
     return cgi_script("login.py")
 

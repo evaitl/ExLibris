@@ -18,7 +18,7 @@ Environment notes:
 - Books live under `/media/books` by default (outside the repo, gitignored path). Create it and drop `.epub` files there before scanning: `sudo mkdir -p /media/books`. You can synthesize test EPUBs with `ebook-convert some.html "/media/books/Title.epub" --title ... --authors ...`.
 - Runtime data (`data/library.db`, `data/covers/`) is gitignored. Run `./scripts/setup-data-dir.sh` once to create it. The DB is created/migrated automatically on first scan or CLI use.
 - Only one long-running maintenance job (scan / cleanup / update_epubs / classify) can run at a time — they share an exclusive `flock` on `data/library.lock`.
-- `admins.txt` (gitignored; copy from `admins.txt.example`) lists usernames allowed to use admin curation actions (edit metadata, fetch metadata, restore cover).
+- `admins.txt` (gitignored; copy from `admins.txt.example`) lists usernames allowed to use admin curation actions (edit metadata, fetch metadata, restore cover, upload cover).
 
 Common commands:
 

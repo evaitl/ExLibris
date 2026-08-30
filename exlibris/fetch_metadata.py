@@ -28,6 +28,7 @@ DEFAULT_COVERS_DIR = PROJECT_ROOT / "data" / "covers"
 MIN_COVER_BYTES = 500
 MIN_COVER_WIDTH = 100
 MIN_COVER_HEIGHT = 100
+MAX_UPLOAD_COVER_BYTES = 8 * 1024 * 1024
 GOOGLE_COVER_ZOOM = 3
 # Stable hashes for provider "no cover" images (full-size, not 1×1).
 KNOWN_PLACEHOLDER_COVER_SHA256: frozenset[str] = frozenset(
@@ -395,16 +396,25 @@ def _remove_existing_covers(covers_root: Path, book_id: int) -> None:
     remove_cover_files(covers_root, book_id)
 
 
+def _image_suffix(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith(b"\xff\xd8"):
+        return ".jpg"
+    return None
+
+
 def _save_cover(
     cover_bytes: bytes,
     *,
     book_id: int,
     covers_dir: Path | None,
+    suffix: str = ".jpg",
 ) -> str:
     covers_root = _resolve_covers_dir(covers_dir)
     try:
         _remove_existing_covers(covers_root, book_id)
-        dest = cover_storage_path(covers_root, book_id, ".jpg")
+        dest = cover_storage_path(covers_root, book_id, suffix)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(cover_bytes)
     except OSError as exc:
@@ -415,8 +425,32 @@ def _save_cover(
     return cover_relative_path(
         covers_root,
         book_id,
-        ".jpg",
+        suffix,
         project_root=PROJECT_ROOT,
+    )
+
+
+def save_uploaded_cover(
+    cover_bytes: bytes,
+    *,
+    book_id: int,
+    covers_dir: Path | None = None,
+) -> str:
+    """Validate and store an administrator-uploaded JPEG or PNG cover."""
+    if not cover_bytes:
+        raise FetchMetadataError("No cover image was uploaded.")
+    if len(cover_bytes) > MAX_UPLOAD_COVER_BYTES:
+        raise FetchMetadataError("Cover image is too large (maximum 8 MB).")
+    suffix = _image_suffix(cover_bytes)
+    if suffix is None:
+        raise FetchMetadataError("Cover must be a JPEG or PNG image.")
+    if _image_dimensions(cover_bytes) is None:
+        raise FetchMetadataError("Cover image could not be read.")
+    return _save_cover(
+        cover_bytes,
+        book_id=book_id,
+        covers_dir=covers_dir,
+        suffix=suffix,
     )
 
 
