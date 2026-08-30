@@ -933,11 +933,11 @@ def render_book_detail(
           <header class="book-detail__header">
             <span class="badge badge--{esc(book.format)}">{esc(book.format.upper())}</span>
 {title_author_block}
-{favorite_form}            <p class="book-actions">
+{favorite_form}            <div class="book-actions">
               <a class="button button--download" href="{esc(download_href(book.id))}">Download</a>
               {fetch_metadata_form}{restore_cover_form}{upload_cover_form}{delete_book_form}
               <span class="book-actions__meta">{esc(format_size(book.file_size))}</span>
-            </p>
+            </div>
           </header>
 
           <dl class="meta-grid">
